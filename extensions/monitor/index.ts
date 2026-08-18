@@ -11,6 +11,7 @@ const RESULT_TYPE = "pi-core-monitor-result";
 const STATUS_ID = "pi-core-background-monitors";
 const MAX_COMMAND_BYTES = 4 * 1024;
 const MAX_OUTPUT_BYTES = 12 * 1024;
+const MAX_PUSH_BYTES = 4 * 1024;
 const MAX_OUTPUT_LINES = 500;
 const MAX_RECENT_RUNS = 20;
 
@@ -219,10 +220,10 @@ function compactStatus(run: MonitorRun): string {
 	return `${run.id} ${run.status} ${seconds}s ${basename(run.cwd)}`;
 }
 
-export function monitorCompletionText(run: MonitorRun): string {
+export function monitorCompletionText(run: MonitorRun, maxBytes = MAX_PUSH_BYTES): string {
 	const pathLine = run.fullOutputPath ? `\nfull: ${run.fullOutputPath}` : "";
 	const header = `monitor: ${run.id}\nstatus: ${run.status}\nexit: ${run.exitCode ?? "none"}${pathLine}\n\n`;
-	const bodyBudget = Math.max(0, MAX_OUTPUT_BYTES - Buffer.byteLength(header));
+	const bodyBudget = Math.max(0, maxBytes - Buffer.byteLength(header));
 	const body = run.output || "No output.";
 	const bytes = Buffer.from(body);
 	if (bytes.length <= bodyBudget) return `${header}${body}`;
@@ -421,7 +422,7 @@ export default function backgroundMonitor(pi: ExtensionAPI): void {
 					const body =
 						run.status === "running"
 							? compactStatus(run)
-							: `${compactStatus(run)}\n${monitorCompletionText(run)}`;
+							: `${compactStatus(run)}\n${monitorCompletionText(run, MAX_OUTPUT_BYTES)}`;
 					return { content: [{ type: "text", text: boundedMonitorTail(body) }], details: {} };
 				}
 				const recent = [...runs.values()].sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RECENT_RUNS);

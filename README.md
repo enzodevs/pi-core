@@ -172,7 +172,7 @@ background_monitor(
 )
 ```
 
-Each monitor receives a short ID. Combined stdout/stderr is written to a private temporary file while only the last 500 lines or 12 KiB can enter model context. Completion records status, exit code, duration, bounded output, and the full-output path. State is persisted before automatic delivery and pending results recover after reload.
+Each monitor receives a short ID. Combined stdout/stderr is written to a private temporary file. Automatic completion carries at most a 4 KiB tail; an explicit status request can return up to the last 500 lines or 12 KiB. Completion records status, exit code, duration, bounded output, and the full-output path. State is persisted before automatic delivery and pending results recover after reload.
 
 `monitor_control` provides compact status and cancellation:
 

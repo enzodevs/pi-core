@@ -83,7 +83,7 @@ describe("background monitor", () => {
 			fullOutputPath: result.fullOutputPath,
 		});
 
-		expect(Buffer.byteLength(text)).toBeLessThanOrEqual(12 * 1024);
+		expect(Buffer.byteLength(text)).toBeLessThanOrEqual(4 * 1024);
 		expect(text).toMatch(/^monitor: abcd1234\nstatus: complete\nexit: 0\nfull: \/tmp\/pi-monitor-/);
 		expect(text).toContain("[truncated:");
 		expect(text).toContain("stress-line-1500");
