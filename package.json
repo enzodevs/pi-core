@@ -1,0 +1,56 @@
+{
+	"name": "@rrghost/pi-core",
+	"version": "0.1.0",
+	"description": "Lean skill visibility, background agents, and OpenAI Fast mode for the Pi coding agent",
+	"license": "MIT",
+	"author": "Enzo Cambraia",
+	"homepage": "https://github.com/enzodevs/pi-core#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/enzodevs/pi-core.git"
+	},
+	"bugs": {
+		"url": "https://github.com/enzodevs/pi-core/issues"
+	},
+	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"files": [
+		"extensions",
+		"CONTEXT-HYGIENE.md",
+		"LICENSE",
+		"README.md"
+	],
+	"pi": {
+		"extensions": [
+			"./extensions/skill-manager/index.ts",
+			"./extensions/fast-mode/index.ts",
+			"./extensions/subagent/index.ts"
+		]
+	},
+	"scripts": {
+		"check": "npm run format:check && npm run typecheck && npm test",
+		"format": "biome check --write .",
+		"format:check": "biome check .",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"typebox": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.2.4",
+		"@earendil-works/pi-coding-agent": "^0.84.2",
+		"@earendil-works/pi-tui": "^0.84.2",
+		"@types/node": "^24.0.0",
+		"typebox": "^1.0.0",
+		"typescript": "^5.9.0",
+		"vitest": "^3.2.0"
+	},
+	"engines": {
+		"node": ">=20"
+	}
+}
