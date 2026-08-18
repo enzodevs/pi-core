@@ -16,6 +16,7 @@
   <a href="#quickstart"><strong>Quickstart</strong></a> ·
   <a href="#skill-visibility"><strong>Skills</strong></a> ·
   <a href="#background-agents"><strong>Agents</strong></a> ·
+  <a href="#minimal-footer"><strong>Footer</strong></a> ·
   <a href="#openai-fast-mode"><strong>Fast mode</strong></a> ·
   <a href="CONTEXT-HYGIENE.md"><strong>Context hygiene</strong></a>
 </p>
@@ -43,6 +44,7 @@ No job dashboard. No polling loop. No sprawling tool catalog. Intermediate work 
 - **Isolated agent context** — child reasoning, file reads, tool calls, usage events, and JSON streams never enter the parent conversation.
 - **Evidence-first review** — the bundled reviewer uses deterministic scope, complete changed-file accounting, candidate falsification, and a validated evidence ledger.
 - **Provider-scoped Fast mode** — injects `service_tier: "priority"` only for OAuth-backed `openai-codex` requests.
+- **Responsive minimal footer** — model, thinking, branch, context, cost, and extension state without render-time I/O.
 - **Node-first TypeScript** — no Bun runtime APIs and no runtime framework beyond Pi's extension surface.
 
 ## Quickstart
@@ -112,7 +114,7 @@ Profiles and the generated metadata index live at:
 
 ## Background agents
 
-The `background_agent` tool delegates independent work without blocking the parent session.
+The `background_agent` tool delegates independent work without blocking the parent session. Each run receives a short ID and is managed through a durable RPC-backed lifecycle.
 
 ```text
 Parent Pi
@@ -131,7 +133,17 @@ The tool intentionally has only three parameters:
 
 Starting the child in `cwd` makes Pi discover that project's `AGENTS.md`/`CLAUDE.md`, settings, skills, extensions, and relative paths. Multiple calls run concurrently. Read-only agents may safely share a directory; parallel writers should receive separate Git worktrees.
 
-When a child finishes, Pi Core injects one bounded completion message and triggers the next safe turn. There is no polling API or user-facing job ceremony. Active children are terminated when the parent session shuts down.
+When a child finishes, Pi Core persists its bounded result before injecting one completion message at the next safe turn. Failed delivery remains pending, retries after the parent settles, and recovers from session entries after reload. Active children are terminated when the parent session shuts down.
+
+A second compact tool, `agent_control`, handles the exceptional cases without requiring polling:
+
+| Action | Behavior |
+| --- | --- |
+| `status` | List compact recent state, or retrieve one run and its final result |
+| `message` | Send steering guidance to a running child over Pi RPC |
+| `stop` | Abort a running child |
+
+Normal operation remains push-based: use control only when the user asks for status, interaction, or cancellation.
 
 ### Bundled roles
 
@@ -156,6 +168,18 @@ The reviewer ships with its complete review procedure and Python standard-librar
 6. Cleans temporary review artifacts after delivery.
 
 The target repository remains read-only unless a separate worker is explicitly asked to implement fixes.
+
+## Minimal footer
+
+Pi Core replaces the default footer with a restrained, single-line status surface:
+
+```text
+◇ gpt-5.6-terra · low · git:main │                    ctx 18% · $0.14 · ⚡ fast
+```
+
+It displays the active model and thinking level, Git branch, context usage, accumulated session cost, and extension statuses such as Fast mode or running background agents. The layout progressively drops cost and branch details on narrow terminals while retaining core state.
+
+Rendering performs no filesystem, Git, network, or history scans. Git updates use Pi's footer watcher, cost is accumulated from message events, and width-safe Unicode characters avoid a Nerd Font dependency.
 
 ## OpenAI Fast mode
 
@@ -201,6 +225,7 @@ State persists at:
 ```mermaid
 flowchart LR
     Pi[Parent Pi session] --> Skills[Skill visibility]
+    Pi --> Footer[Minimal reactive footer]
     Pi --> Fast[Fast-mode request hook]
     Pi --> Agent[Background agent tool]
     Skills --> Store[(~/.pi/agent/pi-core)]
