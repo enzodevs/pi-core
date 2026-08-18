@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	boundedMonitorTail,
 	type MonitorRun,
+	monitorCompletionText,
 	ownsMonitor,
 	runMonitorCommand,
 	snapshotMonitor,
@@ -64,6 +65,29 @@ describe("background monitor", () => {
 		expect(result.output).toContain("out");
 		expect(result.output).toContain("err");
 		expect(await readFile(result.fullOutputPath, "utf8")).toContain("out");
+	});
+
+	it("preserves completion metadata when captured output is truncated", async () => {
+		const result = await runMonitorCommand(
+			"for i in $(seq 1 1500); do printf 'stress-line-%04d %080d\\n' \"$i\" 0; done",
+			"/tmp",
+			5,
+			() => {},
+		);
+		const text = monitorCompletionText({
+			...runningRun(),
+			status: "complete",
+			delivery: "pending",
+			exitCode: 0,
+			output: result.output,
+			fullOutputPath: result.fullOutputPath,
+		});
+
+		expect(Buffer.byteLength(text)).toBeLessThanOrEqual(12 * 1024);
+		expect(text).toMatch(/^monitor: abcd1234\nstatus: complete\nexit: 0\nfull: \/tmp\/pi-monitor-/);
+		expect(text).toContain("[truncated:");
+		expect(text).toContain("stress-line-1500");
+		expect(text).not.toContain("]]ne-");
 	});
 
 	it("terminates a timed-out process group", async () => {

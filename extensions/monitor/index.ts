@@ -83,6 +83,24 @@ export function boundedMonitorTail(text: string): string {
 	return truncateMonitorText(`${prefix}${lineBounded}`, MAX_OUTPUT_BYTES);
 }
 
+function capturedMonitorTail(tail: Buffer, totalBytes: number): string {
+	const decoded = tail.toString("utf8").replace(/^�/u, "");
+	const lines = decoded.split("\n");
+	const lineTruncated = lines.length > MAX_OUTPUT_LINES;
+	const body = lineTruncated ? lines.slice(-MAX_OUTPUT_LINES).join("\n") : decoded;
+	const truncated = totalBytes > Buffer.byteLength(decoded) || lineTruncated;
+	if (!truncated) return body.trimEnd();
+
+	const marker = `[truncated: showing output tail; full stream was ${totalBytes} bytes]\n`;
+	const budget = MAX_OUTPUT_BYTES - Buffer.byteLength(marker);
+	const bytes = Buffer.from(body);
+	const bounded = bytes
+		.subarray(Math.max(0, bytes.length - budget))
+		.toString("utf8")
+		.replace(/^�/u, "");
+	return `${marker}${bounded.trimEnd()}`;
+}
+
 function newId(): string {
 	return randomBytes(4).toString("hex");
 }
@@ -113,14 +131,17 @@ export async function runMonitorCommand(
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		child.stdin.end();
-		let tail = "";
+		let tail = Buffer.alloc(0);
+		let totalOutputBytes = 0;
 		let requestedStatus: MonitorStatus | undefined;
 		let settled = false;
 		let timeout: ReturnType<typeof setTimeout> | undefined;
 
 		const append = (chunk: Buffer) => {
 			output.write(chunk);
-			tail = boundedMonitorTail(tail + chunk.toString());
+			totalOutputBytes += chunk.length;
+			tail = Buffer.concat([tail, chunk]);
+			if (tail.length > MAX_OUTPUT_BYTES * 2) tail = tail.subarray(tail.length - MAX_OUTPUT_BYTES * 2);
 		};
 		const requestStop = (status: MonitorStatus) => {
 			if (settled || requestedStatus) return;
@@ -137,7 +158,7 @@ export async function runMonitorCommand(
 				resolveResult({
 					status,
 					exitCode,
-					output: tail.trimEnd(),
+					output: capturedMonitorTail(tail, totalOutputBytes),
 					fullOutputPath: outputPath,
 				}),
 			);
@@ -198,11 +219,21 @@ function compactStatus(run: MonitorRun): string {
 	return `${run.id} ${run.status} ${seconds}s ${basename(run.cwd)}`;
 }
 
-function completionText(run: MonitorRun): string {
+export function monitorCompletionText(run: MonitorRun): string {
 	const pathLine = run.fullOutputPath ? `\nfull: ${run.fullOutputPath}` : "";
-	return boundedMonitorTail(
-		`monitor: ${run.id}\nstatus: ${run.status}\nexit: ${run.exitCode ?? "none"}${pathLine}\n\n${run.output || "No output."}`,
-	);
+	const header = `monitor: ${run.id}\nstatus: ${run.status}\nexit: ${run.exitCode ?? "none"}${pathLine}\n\n`;
+	const bodyBudget = Math.max(0, MAX_OUTPUT_BYTES - Buffer.byteLength(header));
+	const body = run.output || "No output.";
+	const bytes = Buffer.from(body);
+	if (bytes.length <= bodyBudget) return `${header}${body}`;
+
+	const marker = "[truncated: showing output tail]\n";
+	const tailBudget = Math.max(0, bodyBudget - Buffer.byteLength(marker));
+	const tail = bytes
+		.subarray(Math.max(0, bytes.length - tailBudget))
+		.toString("utf8")
+		.replace(/^�/u, "");
+	return `${header}${marker}${tail}`;
 }
 
 export default function backgroundMonitor(pi: ExtensionAPI): void {
@@ -253,7 +284,7 @@ export default function backgroundMonitor(pi: ExtensionAPI): void {
 			pi.sendMessage(
 				{
 					customType: RESULT_TYPE,
-					content: completionText(run),
+					content: monitorCompletionText(run),
 					display: true,
 					details: { id: run.id },
 				},
@@ -388,7 +419,9 @@ export default function backgroundMonitor(pi: ExtensionAPI): void {
 					const run = runs.get(params.id);
 					if (!run) throw new Error(`Unknown monitor: ${params.id}`);
 					const body =
-						run.status === "running" ? compactStatus(run) : `${compactStatus(run)}\n${completionText(run)}`;
+						run.status === "running"
+							? compactStatus(run)
+							: `${compactStatus(run)}\n${monitorCompletionText(run)}`;
 					return { content: [{ type: "text", text: boundedMonitorTail(body) }], details: {} };
 				}
 				const recent = [...runs.values()].sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RECENT_RUNS);
