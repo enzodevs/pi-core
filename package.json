@@ -33,7 +33,8 @@
 	},
 	"scripts": {
 		"check": "npm run format:check && npm run typecheck && npm test && npm run fallow",
-		"fallow": "fallow --no-cache --format json --quiet",
+		"fallow": "fallow dead-code --no-cache --fail-on-issues --format compact --quiet",
+		"fallow:health": "fallow health --no-cache --report-only --format compact --quiet",
 		"format": "biome check --write .",
 		"format:check": "biome check .",
 		"test": "vitest run",
@@ -49,12 +50,19 @@
 		"@earendil-works/pi-coding-agent": "^0.84.2",
 		"@earendil-works/pi-tui": "^0.84.2",
 		"@types/node": "^24.0.0",
-		"fallow": "3.4.2",
+		"fallow": "3.17.0",
 		"typebox": "^1.0.0",
 		"typescript": "^5.9.0",
 		"vitest": "^3.2.0"
 	},
 	"engines": {
 		"node": ">=20"
+	},
+	"devEngines": {
+		"runtime": {
+			"name": "node",
+			"version": ">=22",
+			"onFail": "error"
+		}
 	}
 }

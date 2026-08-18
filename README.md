@@ -245,6 +245,8 @@ flowchart LR
 
 ## Development
 
+Development uses the latest Node.js 24 LTS pinned in `.node-version` (Node.js 22 remains the minimum supported development runtime); the published extensions remain compatible with Node.js 20.
+
 ```bash
 npm install
 npm run check
@@ -255,6 +257,9 @@ npm run check
 - Biome formatting and lint checks
 - strict TypeScript compilation
 - Vitest unit tests
+- gating Fallow dead-code analysis
+
+Run `npm run fallow:health` for advisory complexity and maintainability signals. Both Fallow commands disable its cache and leave the working tree unchanged.
 
 Runtime source is loaded directly by Pi's TypeScript loader. Package releases include only extensions, documentation, and the license.
 

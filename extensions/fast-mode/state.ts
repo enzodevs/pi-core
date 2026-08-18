@@ -6,7 +6,7 @@ export interface FastModeState {
 	enabled: boolean;
 }
 
-export const DEFAULT_FAST_MODE_STATE: FastModeState = { version: 1, enabled: false };
+const DEFAULT_FAST_MODE_STATE: FastModeState = { version: 1, enabled: false };
 
 export function parseFastModeState(value: unknown): FastModeState {
 	if (!value || typeof value !== "object") return { ...DEFAULT_FAST_MODE_STATE };

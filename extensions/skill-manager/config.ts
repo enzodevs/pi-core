@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { SKILL_MODES, type SkillManagerConfig, type SkillMode } from "./types.js";
 
-export const DEFAULT_CONFIG: SkillManagerConfig = {
+const DEFAULT_CONFIG: SkillManagerConfig = {
 	version: 1,
 	defaultMode: "full",
 	profiles: {},

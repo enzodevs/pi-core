@@ -1,4 +1,3 @@
-import type { Message } from "@earendil-works/pi-ai";
 import {
 	buildSessionContext,
 	convertToLlm,
@@ -16,7 +15,7 @@ export const RECAP_PROMPT =
 export const RECAP_SYSTEM_PROMPT =
 	"Produce one terse factual recap line describing the user's task, completed work, and immediate next step. Do not use tools, preambles, markdown, or quotes.";
 
-export function recapMessages(messages: unknown[]): Message[] {
+export function recapMessages(messages: unknown[]): ReturnType<typeof convertToLlm> {
 	return convertToLlm(messages as Parameters<typeof convertToLlm>[0]);
 }
 

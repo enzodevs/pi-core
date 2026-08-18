@@ -1,16 +1,20 @@
-import type { Message } from "@earendil-works/pi-ai";
-import { buildSessionContext, SessionManager } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, type convertToLlm, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { normalizeRecap, recapMessages } from "../extensions/recap/index.js";
 
 describe("idle recap", () => {
 	it("converts active custom context into provider messages", () => {
-		const user = { role: "user", content: [{ type: "text", text: "Fix delivery" }], timestamp: 1 } as Message;
+		type ProviderMessage = ReturnType<typeof convertToLlm>[number];
+		const user = {
+			role: "user",
+			content: [{ type: "text", text: "Fix delivery" }],
+			timestamp: 1,
+		} as ProviderMessage;
 		const assistant = {
 			role: "assistant",
 			content: [{ type: "text", text: "Implemented it" }],
 			timestamp: 2,
-		} as Message;
+		} as ProviderMessage;
 		const messages = recapMessages([user, { role: "custom", content: "internal" }, assistant]);
 		expect(messages[0]).toEqual(user);
 		expect(JSON.stringify(messages[1])).toContain("internal");

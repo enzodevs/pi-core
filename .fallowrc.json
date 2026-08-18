@@ -1,9 +1,4 @@
 {
 	"$schema": "./node_modules/fallow/schema.json",
-	"entry": [
-		"extensions/fast-mode/index.ts",
-		"extensions/footer/index.ts",
-		"extensions/skill-manager/index.ts",
-		"extensions/subagent/index.ts"
-	]
+	"entry": ["extensions/*/index.ts"]
 }
