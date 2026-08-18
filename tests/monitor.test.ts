@@ -87,7 +87,23 @@ describe("background monitor", () => {
 		expect(text).toMatch(/^monitor: abcd1234\nstatus: complete\nexit: 0\nfull: \/tmp\/pi-monitor-/);
 		expect(text).toContain("[truncated:");
 		expect(text).toContain("stress-line-1500");
+		expect(text).toMatch(/\[truncated: showing output tail\]\nstress-line-/);
 		expect(text).not.toContain("]]ne-");
+	});
+
+	it("starts a truncated Unicode tail on a complete line", () => {
+		const output = Array.from({ length: 1200 }, (_, index) => `λ-${index + 1} 😀 漢字 café 🚀`).join("\n");
+		const text = monitorCompletionText({
+			...runningRun(),
+			status: "complete",
+			delivery: "pending",
+			exitCode: 0,
+			output,
+		});
+		const tail = text.split("[truncated: showing output tail]\n")[1];
+
+		expect(tail).toMatch(/^λ-\d+ 😀/u);
+		expect(tail).not.toContain("�");
 	});
 
 	it("terminates a timed-out process group", async () => {

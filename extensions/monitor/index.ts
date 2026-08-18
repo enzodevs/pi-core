@@ -95,11 +95,16 @@ function capturedMonitorTail(tail: Buffer, totalBytes: number): string {
 	const marker = `[truncated: showing output tail; full stream was ${totalBytes} bytes]\n`;
 	const budget = MAX_OUTPUT_BYTES - Buffer.byteLength(marker);
 	const bytes = Buffer.from(body);
-	const bounded = bytes
-		.subarray(Math.max(0, bytes.length - budget))
-		.toString("utf8")
-		.replace(/^�/u, "");
+	const start = Math.max(0, bytes.length - budget);
+	const bounded = completeLineTail(bytes.subarray(start), start > 0 && bytes[start - 1] !== 0x0a);
 	return `${marker}${bounded.trimEnd()}`;
+}
+
+function completeLineTail(bytes: Buffer, startsMidLine: boolean): string {
+	const decoded = bytes.toString("utf8").replace(/^�/u, "");
+	if (!startsMidLine) return decoded;
+	const newline = decoded.indexOf("\n");
+	return newline >= 0 ? decoded.slice(newline + 1) : decoded;
 }
 
 function newId(): string {
@@ -230,10 +235,8 @@ export function monitorCompletionText(run: MonitorRun, maxBytes = MAX_PUSH_BYTES
 
 	const marker = "[truncated: showing output tail]\n";
 	const tailBudget = Math.max(0, bodyBudget - Buffer.byteLength(marker));
-	const tail = bytes
-		.subarray(Math.max(0, bytes.length - tailBudget))
-		.toString("utf8")
-		.replace(/^�/u, "");
+	const start = Math.max(0, bytes.length - tailBudget);
+	const tail = completeLineTail(bytes.subarray(start), start > 0 && bytes[start - 1] !== 0x0a);
 	return `${header}${marker}${tail}`;
 }
 
