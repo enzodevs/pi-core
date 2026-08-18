@@ -32,7 +32,8 @@
 		]
 	},
 	"scripts": {
-		"check": "npm run format:check && npm run typecheck && npm test",
+		"check": "npm run format:check && npm run typecheck && npm test && npm run fallow",
+		"fallow": "fallow --no-cache --format json --quiet",
 		"format": "biome check --write .",
 		"format:check": "biome check .",
 		"test": "vitest run",
@@ -48,6 +49,7 @@
 		"@earendil-works/pi-coding-agent": "^0.84.2",
 		"@earendil-works/pi-tui": "^0.84.2",
 		"@types/node": "^24.0.0",
+		"fallow": "3.4.2",
 		"typebox": "^1.0.0",
 		"typescript": "^5.9.0",
 		"vitest": "^3.2.0"
