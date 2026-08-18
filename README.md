@@ -273,18 +273,20 @@ flowchart LR
 Development uses the latest Node.js 24 LTS pinned in `.node-version` (Node.js 22 remains the minimum supported development runtime); the published extensions remain compatible with Node.js 20.
 
 ```bash
-npm install
-npm run check
+make install
+make check
 ```
 
-`npm run check` runs:
+Run `make help` to list the focused development targets. The Makefile is a thin, stable interface over the package-owned npm scripts, so local development, CI, and coding agents use the same commands.
+
+`make check` runs:
 
 - Biome formatting and lint checks
 - strict TypeScript compilation
 - Vitest unit tests
 - gating Fallow dead-code analysis
 
-Run `npm run fallow:health` for advisory complexity and maintainability signals. Both Fallow commands disable its cache and leave the working tree unchanged.
+Run `make health` for advisory complexity and maintainability signals, or `make pack` to run required checks and inspect the package tarball contents. Both Fallow commands disable its cache and leave the working tree unchanged.
 
 Runtime source is loaded directly by Pi's TypeScript loader. Package releases include only extensions, documentation, and the license.
 

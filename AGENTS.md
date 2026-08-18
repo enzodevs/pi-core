@@ -4,10 +4,19 @@ Node-first TypeScript package for personal Pi extensions.
 
 ## Commands
 
-- `npm run format` — format and lint with Biome
-- `npm run typecheck` — strict TypeScript check
-- `npm test` — run Vitest
-- `npm run check` — run all verification
+Use the repository `Makefile` as the stable command interface:
+
+- `make install` — install locked development dependencies
+- `make format` — format and lint with Biome
+- `make typecheck` — strict TypeScript check
+- `make test` — run Vitest
+- `make fallow` — gate on dead-code findings
+- `make health` — report advisory Fallow health findings
+- `make check` — run all required verification
+- `make pack` — verify checks and published package contents
+- `make help` — list available targets
+
+Keep implementation details in `package.json` scripts; Make targets should remain thin delegates so CI, agents, and contributors share one interface.
 
 ## Conventions
 
