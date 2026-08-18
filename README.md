@@ -16,6 +16,7 @@
   <a href="#quickstart"><strong>Quickstart</strong></a> ·
   <a href="#skill-visibility"><strong>Skills</strong></a> ·
   <a href="#background-agents"><strong>Agents</strong></a> ·
+  <a href="#background-monitors"><strong>Monitors</strong></a> ·
   <a href="#minimal-footer"><strong>Footer</strong></a> ·
   <a href="#idle-recap"><strong>Recap</strong></a> ·
   <a href="#openai-fast-mode"><strong>Fast mode</strong></a> ·
@@ -42,6 +43,7 @@ No job dashboard. No polling loop. No sprawling tool catalog. Intermediate work 
 - **Exact-CWD skill profiles** — sessions in the same directory share one visibility policy.
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
 - **True background delegation** — child Pi processes return immediately and report completion through the parent session.
+- **Model-free background monitoring** — watch CI, deployments, or long commands and receive one durable completion without polling.
 - **Isolated agent context** — child reasoning, file reads, tool calls, usage events, and JSON streams never enter the parent conversation.
 - **Evidence-first review** — the bundled reviewer uses deterministic scope, complete changed-file accounting, candidate falsification, and a validated evidence ledger.
 - **Provider-scoped Fast mode** — injects `service_tier: "priority"` only for OAuth-backed `openai-codex` requests.
@@ -157,6 +159,29 @@ Normal operation remains push-based: use control only when the user asks for sta
 | `worker` | Autonomous implementation in an isolated context | Pi defaults |
 
 User agents in `~/.pi/agent/agents/*.md` override bundled agents with the same name. Each child inherits the parent's active model and thinking level unless its agent definition pins a model.
+
+## Background monitors
+
+The `background_monitor` tool runs a shell command without blocking the parent agent and pushes one durable result when the process exits. It is intended for CI checks, deployments, log sentinels, and other long waits that do not need a model-backed child.
+
+```text
+background_monitor(
+  command="gh pr checks 123 --watch --fail-fast",
+  cwd="/path/to/repo",
+  timeoutSeconds=1800
+)
+```
+
+Each monitor receives a short ID. Combined stdout/stderr is written to a private temporary file while only the last 500 lines or 12 KiB can enter model context. Completion records status, exit code, duration, bounded output, and the full-output path. State is persisted before automatic delivery and pending results recover after reload.
+
+`monitor_control` provides compact status and cancellation:
+
+| Action | Behavior |
+| --- | --- |
+| `status` | List recent monitors or retrieve one bounded terminal result |
+| `stop` | Terminate a running monitor and its process group |
+
+Active monitors stop on session shutdown or branch changes. No model call, polling loop, scheduler, or dashboard is involved.
 
 ## Evidence-first review
 

@@ -28,7 +28,8 @@
 			"./extensions/fast-mode/index.ts",
 			"./extensions/subagent/index.ts",
 			"./extensions/footer/index.ts",
-			"./extensions/recap/index.ts"
+			"./extensions/recap/index.ts",
+			"./extensions/monitor/index.ts"
 		]
 	},
 	"scripts": {
