@@ -162,7 +162,7 @@ User agents in `~/.pi/agent/agents/*.md` override bundled agents with the same n
 
 ## Background monitors
 
-The `background_monitor` tool runs a shell command without blocking the parent agent and pushes one durable result when the process exits. It is intended for CI checks, deployments, log sentinels, and other long waits that do not need a model-backed child.
+The `background_monitor` tool runs a shell command without blocking the parent agent and pushes one durable result when the process exits. It is intended for CI checks, deployments, log sentinels, and other long waits that do not need a model-backed child. The command must block until the watched operation reaches a terminal state; `timeoutSeconds` is a generous safety deadline, not the polling window. Prefer provider-native watch commands such as `gh run watch <id> --exit-status` when available.
 
 ```text
 background_monitor(

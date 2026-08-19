@@ -19,7 +19,11 @@ const MonitorParams = Type.Object({
 	command: Type.String({ description: "Shell command to monitor asynchronously" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory; defaults to the parent CWD" })),
 	timeoutSeconds: Type.Optional(
-		Type.Integer({ minimum: 1, maximum: 86_400, description: "Optional deadline in seconds" }),
+		Type.Integer({
+			minimum: 1,
+			maximum: 86_400,
+			description: "Safety deadline in seconds; not the polling window",
+		}),
 	),
 });
 
@@ -374,7 +378,8 @@ export default function backgroundMonitor(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "background_monitor",
 		label: "Background Monitor",
-		description: "Run a shell command asynchronously and push one durable, bounded result when it exits.",
+		description:
+			"Run a shell command asynchronously and push one durable, bounded result when it exits. The command must block until the watched operation is terminal; timeoutSeconds is only a safety deadline.",
 		parameters: MonitorParams,
 		async execute(_toolCallId, params, _signal, _update, ctx) {
 			const cwd = resolve(ctx.cwd, params.cwd ?? ctx.cwd);
