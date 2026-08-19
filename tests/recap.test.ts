@@ -1,8 +1,28 @@
 import { buildSessionContext, type convertToLlm, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { normalizeRecap, recapMessages } from "../extensions/recap/index.js";
+import {
+	normalizeRecap,
+	preferredRecapModel,
+	RECAP_MODEL_ID,
+	RECAP_MODEL_PROVIDER,
+	recapMessages,
+} from "../extensions/recap/index.js";
 
 describe("idle recap", () => {
+	it("prefers authenticated Codex Spark and otherwise keeps the active model", () => {
+		const active = { id: "active" };
+		const spark = { id: "spark" };
+		const registry = {
+			find: (provider: string, modelId: string) =>
+				provider === RECAP_MODEL_PROVIDER && modelId === RECAP_MODEL_ID ? spark : undefined,
+			hasConfiguredAuth: () => true,
+		};
+
+		expect(preferredRecapModel(registry, active)).toBe(spark);
+		expect(preferredRecapModel({ ...registry, hasConfiguredAuth: () => false }, active)).toBe(active);
+		expect(preferredRecapModel({ ...registry, find: () => undefined }, active)).toBe(active);
+	});
+
 	it("converts active custom context into provider messages", () => {
 		type ProviderMessage = ReturnType<typeof convertToLlm>[number];
 		const user = {

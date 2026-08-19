@@ -8,6 +8,8 @@ import { Text } from "@earendil-works/pi-tui";
 
 export const DEFAULT_RECAP_DELAY_MS = 3 * 60 * 1000;
 export const RECAP_WIDGET_KEY = "pi-core-recap";
+export const RECAP_MODEL_PROVIDER = "openai-codex";
+export const RECAP_MODEL_ID = "gpt-5.3-codex-spark";
 export const MAX_RECAP_WORDS = 20;
 export const MAX_RECAP_CHARS = 240;
 export const RECAP_PROMPT =
@@ -17,6 +19,14 @@ export const RECAP_SYSTEM_PROMPT =
 
 export function recapMessages(messages: unknown[]): ReturnType<typeof convertToLlm> {
 	return convertToLlm(messages as Parameters<typeof convertToLlm>[0]);
+}
+
+export function preferredRecapModel<T>(
+	registry: { find(provider: string, modelId: string): T | undefined; hasConfiguredAuth(model: T): boolean },
+	activeModel: T,
+): T {
+	const spark = registry.find(RECAP_MODEL_PROVIDER, RECAP_MODEL_ID);
+	return spark && registry.hasConfiguredAuth(spark) ? spark : activeModel;
 }
 
 export function normalizeRecap(text: string): string {
@@ -72,17 +82,32 @@ export default function idleRecap(pi: ExtensionAPI): void {
 		const controller = new AbortController();
 		request = controller;
 		try {
-			const response = await ctx.modelRegistry.complete(
-				ctx.model,
-				{
-					systemPrompt: RECAP_SYSTEM_PROMPT,
-					messages: [
-						...messages,
-						{ role: "user", content: [{ type: "text", text: RECAP_PROMPT }], timestamp: Date.now() },
-					],
-				},
-				{ reasoningEffort: "low", cacheRetention: "none", signal: controller.signal },
-			);
+			const activeModel = ctx.model;
+			const model = preferredRecapModel(ctx.modelRegistry, activeModel);
+			const context = {
+				systemPrompt: RECAP_SYSTEM_PROMPT,
+				messages: [
+					...messages,
+					{
+						role: "user" as const,
+						content: [{ type: "text" as const, text: RECAP_PROMPT }],
+						timestamp: Date.now(),
+					},
+				],
+			};
+			const options = {
+				reasoningEffort: "low" as const,
+				cacheRetention: "none" as const,
+				signal: controller.signal,
+			};
+			const response = await (async () => {
+				try {
+					return await ctx.modelRegistry.complete(model, context, options);
+				} catch (error) {
+					if (model === activeModel || controller.signal.aborted) throw error;
+					return ctx.modelRegistry.complete(activeModel, context, options);
+				}
+			})();
 			if (scheduledGeneration !== generation || controller.signal.aborted || !ctx.isIdle()) return;
 			const text = normalizeRecap(
 				response.content

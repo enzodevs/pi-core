@@ -212,7 +212,7 @@ Rendering performs no filesystem, Git, network, or history scans. Git updates us
 
 After Pi settles and remains idle for three minutes, Pi Core generates one short sentence describing the task, completed work, and immediate next step. It appears quietly below the editor and disappears when work resumes.
 
-The recap uses the active authenticated model at low reasoning, exposes no tools, and is never written to session history or added to model context. Stale or cancelled results are discarded. Pi extensions cannot observe raw editor keystrokes, so the timer resets on submitted input and agent/session activity rather than cursor movement.
+The recap prefers the authenticated `openai-codex/gpt-5.3-codex-spark` model at low reasoning and falls back to the active session model if Spark is unavailable or a Spark request fails. It exposes no tools and is never written to session history or added to model context. Stale or cancelled results are discarded. Pi extensions cannot observe raw editor keystrokes, so the timer resets on submitted input and agent/session activity rather than cursor movement.
 
 ## OpenAI Fast mode
 
