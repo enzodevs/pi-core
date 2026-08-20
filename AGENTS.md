@@ -27,3 +27,4 @@ Keep implementation details in `package.json` scripts; Make targets should remai
 - Do not mutate skill files.
 - Follow `CONTEXT-HYGIENE.md` for every model-facing schema, prompt, and result.
 - Keep always-active tool surfaces minimal; bound variable output and return conclusions instead of transcripts.
+- A read-only checkout of Pi upstream is available at `/home/rrghost/.opensrc/repos/github.com/earendil-works/pi/main` for source-level API verification; still read the installed Pi docs first when working on Pi behavior.

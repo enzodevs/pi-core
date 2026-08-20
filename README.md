@@ -17,6 +17,7 @@
   <a href="#skill-visibility"><strong>Skills</strong></a> ·
   <a href="#background-agents"><strong>Agents</strong></a> ·
   <a href="#background-monitors"><strong>Monitors</strong></a> ·
+  <a href="#temporary-sudo"><strong>Sudo</strong></a> ·
   <a href="#minimal-footer"><strong>Footer</strong></a> ·
   <a href="#idle-recap"><strong>Recap</strong></a> ·
   <a href="#openai-fast-mode"><strong>Fast mode</strong></a> ·
@@ -44,6 +45,7 @@ No job dashboard. No polling loop. No sprawling tool catalog. Intermediate work 
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
 - **True background delegation** — child Pi processes return immediately and report completion through the parent session.
 - **Model-free background monitoring** — watch CI, deployments, or long commands and receive one durable completion without polling.
+- **Temporary sudo** — approve each privileged command and enter a masked password that exists only in session memory.
 - **Isolated agent context** — child reasoning, file reads, tool calls, usage events, and JSON streams never enter the parent conversation.
 - **Evidence-first review** — the bundled reviewer uses deterministic scope, complete changed-file accounting, candidate falsification, and a validated evidence ledger.
 - **Provider-scoped Fast mode** — injects `service_tier: "priority"` only for OAuth-backed `openai-codex` requests.
@@ -182,6 +184,12 @@ Each monitor receives a short ID. Combined stdout/stderr is written to a private
 | `stop` | Terminate a running monitor and its process group |
 
 Active monitors stop on session shutdown or branch changes. No model call, polling loop, scheduler, or dashboard is involved.
+
+## Temporary sudo
+
+The `sudo` tool runs one shell command with root privileges. Every call displays the exact command for approval. On first use, Pi opens a masked password dialog; the password stays only in extension memory and is reused for approved commands in the current session. It is never placed in tool arguments, output, session history, environment variables, or process arguments.
+
+Privileged output is capped at the last 2,000 lines or 50 KiB. Larger output is written to a private temporary file. `/sudo-lock` forgets the credential immediately; session shutdown also clears it and invalidates sudo's timestamp. The tool is unavailable outside Pi's interactive TUI.
 
 ## Evidence-first review
 

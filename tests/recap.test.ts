@@ -94,13 +94,10 @@ describe("idle recap", () => {
 		);
 	});
 
-	it("bounds verbose and malformed responses", () => {
-		const words = normalizeRecap(Array.from({ length: 200 }, (_, index) => `word${index}`).join(" "));
-		expect(words.split(/\s+/)).toHaveLength(20);
-		expect(words.endsWith("…")).toBe(true);
-
-		const longWord = normalizeRecap("x".repeat(1_000));
-		expect([...longWord]).toHaveLength(240);
-		expect(longWord.endsWith("…")).toBe(true);
+	it("does not truncate a complete recap", () => {
+		const recap =
+			"You reviewed anti-slop, ran a read-only trial on UniAlgo with a detached worktree, and found about 1,313 strict hits.";
+		expect(normalizeRecap(recap)).toBe(recap);
+		expect(normalizeRecap(recap)).not.toContain("…");
 	});
 });

@@ -29,7 +29,8 @@
 			"./extensions/subagent/index.ts",
 			"./extensions/footer/index.ts",
 			"./extensions/recap/index.ts",
-			"./extensions/monitor/index.ts"
+			"./extensions/monitor/index.ts",
+			"./extensions/sudo/index.ts"
 		]
 	},
 	"scripts": {

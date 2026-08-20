@@ -10,10 +10,8 @@ export const DEFAULT_RECAP_DELAY_MS = 3 * 60 * 1000;
 export const RECAP_WIDGET_KEY = "pi-core-recap";
 export const RECAP_MODEL_PROVIDER = "openai-codex";
 export const RECAP_MODEL_ID = "gpt-5.3-codex-spark";
-export const MAX_RECAP_WORDS = 20;
-export const MAX_RECAP_CHARS = 240;
 export const RECAP_PROMPT =
-	"Recap where this conversation left off in one short sentence (max 20 words) so the user can resume after stepping away. No preamble or markdown.";
+	"Recap where this conversation left off in one short sentence so the user can resume after stepping away. Keep it concise, complete, and untruncated. No preamble or markdown.";
 export const RECAP_SYSTEM_PROMPT =
 	"Produce one terse factual recap line describing the user's task, completed work, and immediate next step. Do not use tools, preambles, markdown, or quotes.";
 
@@ -36,14 +34,7 @@ export function normalizeRecap(text: string): string {
 		.find(Boolean);
 	if (!line) return "";
 
-	const cleaned = line.replace(/^(["'`]|[-*]\s)+|(["'`])$/g, "").replace(/\s+/g, " ");
-	const words = cleaned.split(" ");
-	const wordBounded =
-		words.length > MAX_RECAP_WORDS ? `${words.slice(0, MAX_RECAP_WORDS).join(" ")}…` : cleaned;
-	const characters = [...wordBounded];
-	return characters.length > MAX_RECAP_CHARS
-		? `${characters.slice(0, MAX_RECAP_CHARS - 1).join("")}…`
-		: wordBounded;
+	return line.replace(/^(["'`]|[-*]\s)+|(["'`])$/g, "").replace(/\s+/g, " ");
 }
 
 export default function idleRecap(pi: ExtensionAPI): void {
@@ -120,7 +111,7 @@ export default function idleRecap(pi: ExtensionAPI): void {
 				RECAP_WIDGET_KEY,
 				(_tui, theme) =>
 					new Text(`${theme.fg("dim", "※")} ${theme.italic(theme.fg("dim", `recap: ${text}`))}`, 0, 0),
-				{ placement: "belowEditor" },
+				{ placement: "aboveEditor" },
 			);
 		} catch {
 			// Recaps are opportunistic and must never interrupt the session.
