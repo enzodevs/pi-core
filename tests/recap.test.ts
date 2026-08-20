@@ -1,6 +1,8 @@
 import { buildSessionContext, type convertToLlm, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
+	latestAssistantTextLength,
+	MIN_RECAP_ASSISTANT_CHARS,
 	normalizeRecap,
 	preferredRecapModel,
 	RECAP_MODEL_ID,
@@ -77,6 +79,29 @@ describe("idle recap", () => {
 		const messages = recapMessages(buildSessionContext(session.getEntries(), session.getLeafId()).messages);
 		expect(JSON.stringify(messages)).toContain("Finished branch setup; next integrate it.");
 		expect(JSON.stringify(messages)).not.toContain("Abandoned branch");
+	});
+
+	it("measures only the latest assistant's visible text", () => {
+		const messages = [
+			{ role: "assistant", content: [{ type: "text", text: "x".repeat(MIN_RECAP_ASSISTANT_CHARS) }] },
+			{ role: "user", content: [{ type: "text", text: "y".repeat(500) }] },
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "z".repeat(500) },
+					{ type: "text", text: "  short reply  " },
+				],
+			},
+		];
+
+		expect(latestAssistantTextLength(messages)).toBe("short reply".length);
+		expect(latestAssistantTextLength([{ role: "user", content: [] }])).toBe(0);
+	});
+
+	it("counts Unicode characters rather than UTF-16 code units", () => {
+		expect(
+			latestAssistantTextLength([{ role: "assistant", content: [{ type: "text", text: "👍👍" }] }]),
+		).toBe(2);
 	});
 
 	it("normalizes a terse model response", () => {

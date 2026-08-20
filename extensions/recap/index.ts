@@ -7,6 +7,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 
 export const DEFAULT_RECAP_DELAY_MS = 3 * 60 * 1000;
+export const MIN_RECAP_ASSISTANT_CHARS = 200;
 export const RECAP_WIDGET_KEY = "pi-core-recap";
 export const RECAP_MODEL_PROVIDER = "openai-codex";
 export const RECAP_MODEL_ID = "gpt-5.3-codex-spark";
@@ -17,6 +18,32 @@ export const RECAP_SYSTEM_PROMPT =
 
 export function recapMessages(messages: unknown[]): ReturnType<typeof convertToLlm> {
 	return convertToLlm(messages as Parameters<typeof convertToLlm>[0]);
+}
+
+export function latestAssistantTextLength(messages: unknown[]): number {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (!message || typeof message !== "object" || !("role" in message) || message.role !== "assistant") {
+			continue;
+		}
+		if (!("content" in message) || !Array.isArray(message.content)) return 0;
+		const text = message.content
+			.filter((part): part is { type: "text"; text: string } =>
+				Boolean(
+					part &&
+						typeof part === "object" &&
+						"type" in part &&
+						part.type === "text" &&
+						"text" in part &&
+						typeof part.text === "string",
+				),
+			)
+			.map((part) => part.text)
+			.join("")
+			.trim();
+		return Array.from(text).length;
+	}
+	return 0;
 }
 
 export function preferredRecapModel<T>(
@@ -68,7 +95,7 @@ export default function idleRecap(pi: ExtensionAPI): void {
 		const messages = recapMessages(
 			buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).messages,
 		);
-		if (messages.length === 0) return;
+		if (messages.length === 0 || latestAssistantTextLength(messages) < MIN_RECAP_ASSISTANT_CHARS) return;
 
 		const controller = new AbortController();
 		request = controller;
