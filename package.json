@@ -26,6 +26,7 @@
 		"extensions": [
 			"./extensions/skill-manager/index.ts",
 			"./extensions/fast-mode/index.ts",
+			"./extensions/file-autocomplete/index.ts",
 			"./extensions/subagent/index.ts",
 			"./extensions/footer/index.ts",
 			"./extensions/recap/index.ts",
