@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { ownsRun, snapshotRun, truncateUtf8 } from "../extensions/subagent/index.js";
+import { ownsRun, resolveRequestedModel, snapshotRun, truncateUtf8 } from "../extensions/subagent/index.js";
+
+describe("background agent model selection", () => {
+	const available = [
+		{ provider: "openai", id: "gpt-5.6-terra" },
+		{ provider: "openrouter", id: "anthropic/claude-sonnet" },
+	];
+
+	it("validates and preserves provider/model selections", () => {
+		expect(resolveRequestedModel("openai/gpt-5.6-terra", available)).toBe("openai/gpt-5.6-terra");
+		expect(resolveRequestedModel("openrouter/anthropic/claude-sonnet", available)).toBe(
+			"openrouter/anthropic/claude-sonnet",
+		);
+		expect(resolveRequestedModel(undefined, available)).toBeUndefined();
+	});
+
+	it("rejects malformed, unknown, and unavailable models concisely", () => {
+		expect(() => resolveRequestedModel("gpt-5.6-terra", available)).toThrow("expected provider/model");
+		expect(() => resolveRequestedModel("openai/unknown", available)).toThrow("Unknown or unavailable model");
+	});
+});
 
 describe("background agent handoff truncation", () => {
 	it("leaves bounded output unchanged", () => {

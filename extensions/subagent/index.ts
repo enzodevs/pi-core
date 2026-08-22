@@ -15,10 +15,22 @@ const STATUS_ID = "pi-core-background-agents";
 const HANDOFF_INSTRUCTION =
 	"Return only a concise final handoff: findings, exact file references, and actionable conclusions. Omit narration, tool transcripts, and repeated task text.";
 
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
 const BackgroundAgentParams = Type.Object({
 	agent: Type.String({ description: "scout, planner, reviewer, worker, or a user agent" }),
 	task: Type.String({ description: "Independent task to run" }),
 	cwd: Type.Optional(Type.String({ description: "Child working directory; defaults to the parent CWD" })),
+	model: Type.Optional(
+		Type.String({ description: "Child model as provider/model; defaults to the agent or current session" }),
+	),
+	thinking: Type.Optional(
+		Type.Unsafe<(typeof THINKING_LEVELS)[number]>({
+			type: "string",
+			enum: THINKING_LEVELS,
+			description: "Child thinking level",
+		}),
+	),
 });
 
 const AgentControlParams = Type.Object({
@@ -111,11 +123,14 @@ async function runAgent(
 	ctx: ExtensionContext,
 	cwd: string,
 	onSpawn: (handle: ChildHandle) => void,
+	overrides: { model?: string; thinking?: (typeof THINKING_LEVELS)[number] } = {},
 ): Promise<string> {
 	const args = ["--mode", "rpc", "--no-session"];
-	const model = agent.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
+	const model =
+		overrides.model ?? agent.model ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
 	if (model) args.push("--model", model);
-	if (!agent.model && ctx.thinkingLevel) args.push("--thinking", ctx.thinkingLevel);
+	const thinking = overrides.thinking ?? (!agent.model ? ctx.thinkingLevel : undefined);
+	if (thinking) args.push("--thinking", thinking);
 	if (agent.tools?.length) args.push("--tools", agent.tools.join(","));
 
 	const temp = await writeSystemPrompt(agent);
@@ -201,6 +216,23 @@ async function runAgent(
 	} finally {
 		await fs.promises.rm(temp.dir, { recursive: true, force: true });
 	}
+}
+
+export function resolveRequestedModel(
+	requested: string | undefined,
+	available: ReadonlyArray<{ provider: string; id: string }>,
+): string | undefined {
+	if (requested === undefined) return undefined;
+	const value = requested.trim();
+	const slash = value.indexOf("/");
+	if (slash <= 0 || slash === value.length - 1) {
+		throw new Error("Invalid model; expected provider/model.");
+	}
+	const provider = value.slice(0, slash);
+	const id = value.slice(slash + 1);
+	const match = available.find((model) => model.provider === provider && model.id === id);
+	if (!match) throw new Error(`Unknown or unavailable model: ${value}. Choose a provider/model from /model.`);
+	return `${match.provider}/${match.id}`;
 }
 
 export function ownsRun(runs: ReadonlyMap<string, ManagedRun>, run: ManagedRun, generation: number): boolean {
@@ -391,6 +423,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			const cwd = path.resolve(ctx.cwd, params.cwd ?? ctx.cwd);
 			if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory())
 				throw new Error(`Invalid child CWD: ${cwd}`);
+			const model = resolveRequestedModel(params.model, ctx.modelRegistry.getAvailable());
 
 			let id = newRunId();
 			while (runs.has(id)) id = newRunId();
@@ -407,14 +440,21 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			runs.set(id, run);
 			persist(run);
 
-			void runAgent(agent, params.task, ctx, cwd, (child) => {
-				if (!ownsRun(runs, run, branchGeneration)) {
-					child.abort();
-					return;
-				}
-				run.child = child;
-				updateStatus();
-			})
+			void runAgent(
+				agent,
+				params.task,
+				ctx,
+				cwd,
+				(child) => {
+					if (!ownsRun(runs, run, branchGeneration)) {
+						child.abort();
+						return;
+					}
+					run.child = child;
+					updateStatus();
+				},
+				{ model, thinking: params.thinking },
+			)
 				.then((output) => {
 					if (ownsRun(runs, run, branchGeneration)) finish(run, "complete", output);
 				})
