@@ -413,6 +413,11 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		label: "Background Agent",
 		description:
 			"Run independent work asynchronously. Returns a short ID; completion is pushed automatically and durably. Never poll unless asked. Bundled: scout, planner, reviewer, worker.",
+		promptGuidelines: [
+			"Default to direct inspection and execution. Do not use background_agent for small, bounded tasks that the parent can handle with a few targeted tool calls.",
+			"Use background_agent only when work is genuinely independent and substantial enough that parallelism, isolated context, or specialized review materially improves the result.",
+			"Respect an explicit user preference against subagents. Do not invoke background_agent unless the user later requests it.",
+		],
 		parameters: BackgroundAgentParams,
 		async execute(_toolCallId, params, _signal, _update, ctx) {
 			const agents = discoverAgents(ctx.cwd, "user").agents;
