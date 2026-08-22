@@ -30,6 +30,7 @@
 			"./extensions/footer/index.ts",
 			"./extensions/recap/index.ts",
 			"./extensions/draft-toggle/index.ts",
+			"./extensions/image-clipboard/index.ts",
 			"./extensions/monitor/index.ts",
 			"./extensions/sudo/index.ts"
 		]
