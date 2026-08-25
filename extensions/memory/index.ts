@@ -6,6 +6,16 @@ import { formatMemoryContext, mergeMemoryHits, parseMemoryHits } from "./context
 const SEARCH_TIMEOUT_MS = 10_000;
 const JOURNAL_TIMEOUT_MS = 2_000;
 const MEMORY_MESSAGE_TYPE = "pi-core-memory-context";
+const EMBEDDING_ARGS = [
+	"--embedding-model",
+	"ibm-granite/granite-embedding-311m-multilingual-r2",
+	"--embedding-emitted-dimensions",
+	"768",
+	"--embedding-dimensions",
+	"256",
+	"--embedding-batch-size",
+	"1",
+] as const;
 
 export default function memoryContext(pi: ExtensionAPI): void {
 	let openingLookupAttempted = false;
@@ -18,12 +28,17 @@ export default function memoryContext(pi: ExtensionAPI): void {
 		if (openingLookupAttempted || !event.prompt.trim()) return;
 		openingLookupAttempted = true;
 
-		const common = ["search", event.prompt, "--json", "--limit", "4"];
+		const common = ["search", event.prompt, "--json", "--limit", "3", ...EMBEDDING_ARGS];
 		const globalRoot = path.join(os.homedir(), ".agents", "memory", "global");
-		const [project, global] = await Promise.all([
-			pi.exec("agent-memory", ["--from", ctx.cwd, ...common], { timeout: SEARCH_TIMEOUT_MS }),
-			pi.exec("agent-memory", ["--root", globalRoot, ...common], { timeout: SEARCH_TIMEOUT_MS }),
-		]);
+		// The local embedding server is intentionally single-slot. Run searches
+		// sequentially so project and global cache misses cannot overload the same
+		// llama-server process concurrently.
+		const project = await pi.exec("agent-memory", ["--from", ctx.cwd, ...common], {
+			timeout: SEARCH_TIMEOUT_MS,
+		});
+		const global = await pi.exec("agent-memory", ["--root", globalRoot, ...common], {
+			timeout: SEARCH_TIMEOUT_MS,
+		});
 		const hits = mergeMemoryHits([
 			project.code === 0 ? parseMemoryHits(project.stdout) : [],
 			global.code === 0 ? parseMemoryHits(global.stdout) : [],
