@@ -31,6 +31,7 @@ describe("memory context", () => {
 
 	it("skips vague opening prompts but accepts concrete tasks and identifiers", () => {
 		expect(shouldRetrieveMemory("Fiz o reload. podemos testar")).toBe(false);
+		expect(shouldRetrieveMemory("Fiz o restart novamente.")).toBe(false);
 		expect(shouldRetrieveMemory("Pode me ajudar agora?")).toBe(false);
 		expect(shouldRetrieveMemory("Review extensions/memory/index.ts")).toBe(true);
 		expect(shouldRetrieveMemory("Corrija o fluxo de autenticação OAuth")).toBe(true);
