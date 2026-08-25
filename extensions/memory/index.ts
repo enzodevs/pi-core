@@ -7,7 +7,7 @@ import {
 	firstPendingJob,
 	launchConsolidator,
 } from "./consolidator.ts";
-import { formatMemoryContext, mergeMemoryHits, parseMemoryHits } from "./context.ts";
+import { formatMemoryContext, mergeMemoryHits, parseMemoryHits, shouldRetrieveMemory } from "./context.ts";
 
 const SEARCH_TIMEOUT_MS = 10_000;
 const JOURNAL_TIMEOUT_MS = 2_000;
@@ -34,7 +34,7 @@ export default function memoryContext(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (isConsolidator || openingLookupAttempted || !event.prompt.trim()) return;
+		if (isConsolidator || openingLookupAttempted || !shouldRetrieveMemory(event.prompt)) return;
 		openingLookupAttempted = true;
 
 		const common = ["search", event.prompt, "--json", "--limit", "3", ...EMBEDDING_ARGS];

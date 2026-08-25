@@ -5,6 +5,7 @@ import {
 	MAX_MEMORY_CONTEXT_BYTES,
 	mergeMemoryHits,
 	parseMemoryHits,
+	shouldRetrieveMemory,
 } from "../extensions/memory/context.ts";
 
 describe("memory context", () => {
@@ -26,6 +27,13 @@ describe("memory context", () => {
 			1,
 		);
 		expect(merged).toEqual([{ path: "/a.md", title: "new", score: 0.9 }]);
+	});
+
+	it("skips vague opening prompts but accepts concrete tasks and identifiers", () => {
+		expect(shouldRetrieveMemory("Fiz o reload. podemos testar")).toBe(false);
+		expect(shouldRetrieveMemory("Pode me ajudar agora?")).toBe(false);
+		expect(shouldRetrieveMemory("Review extensions/memory/index.ts")).toBe(true);
+		expect(shouldRetrieveMemory("Corrija o fluxo de autenticação OAuth")).toBe(true);
 	});
 
 	it("frames memory as untrusted evidence and strictly bounds UTF-8 output", () => {

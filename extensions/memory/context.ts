@@ -1,7 +1,26 @@
 import { Buffer } from "node:buffer";
 
-export const MAX_MEMORY_CONTEXT_BYTES = 4 * 1024;
+export const MAX_MEMORY_CONTEXT_BYTES = 3 * 1024;
 const MAX_MEMORY_HITS = 3;
+const MAX_HIT_TEXT_BYTES = 720;
+const GENERIC_OPENING_TERMS = new Set([
+	"reload",
+	"recarreguei",
+	"test",
+	"testar",
+	"teste",
+	"testing",
+	"podemos",
+	"pode",
+	"ajudar",
+	"help",
+	"please",
+	"quero",
+	"agora",
+	"pronto",
+	"ready",
+	"ok",
+]);
 
 export interface MemoryHit {
 	path?: string;
@@ -42,6 +61,15 @@ export function mergeMemoryHits(
 		.slice(0, limit);
 }
 
+export function shouldRetrieveMemory(prompt: string): boolean {
+	const terms = prompt
+		.toLowerCase()
+		.split(/[^\p{L}\p{N}_./-]+/u)
+		.map((term) => term.trim().replace(/^[._/-]+|[._/-]+$/g, ""))
+		.filter((term) => term.length >= 3 && !GENERIC_OPENING_TERMS.has(term));
+	return terms.length >= 2 || terms.some((term) => /[./_-]/.test(term) || /\d/.test(term));
+}
+
 function boundedUtf8(text: string, maxBytes: number): string {
 	const bytes = Buffer.from(text);
 	if (bytes.length <= maxBytes) return text;
@@ -54,7 +82,7 @@ export function formatMemoryContext(hits: ReadonlyArray<MemoryHit>): string {
 	const evidence = hits
 		.map((hit, index) => {
 			const title = hit.title ?? hit.heading ?? "Untitled memory";
-			const body = (hit.text ?? "").trim();
+			const body = boundedUtf8((hit.text ?? "").trim(), MAX_HIT_TEXT_BYTES);
 			const source = hit.path ? `\nSource: ${hit.path}` : "";
 			return `${index + 1}. ${title}${source}\n${body}`.trim();
 		})
