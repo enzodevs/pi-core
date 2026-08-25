@@ -43,7 +43,13 @@ Use agent-memory CLI as the only write interface. Inspect the journal status and
 
 Extract only stable reusable facts: explicit user preferences or corrections, verified architecture decisions, durable workflows, and validated gotchas. Exclude secrets, raw transcripts, temporary progress, speculative assistant claims, and canonical facts that belong only in repository documentation.
 
-For each survivor, search related project and global memories first. Classify it as ADD, REAFFIRM, MERGE, SUPERSEDE, COEXIST, CONTRADICT, or DEFER. Write bounded patch JSON under /tmp, create a candidate linked to journal job ${job.id}, and apply it only when provenance and the current source/target hashes validate. Prefer project scope; do not create global memory unless the user explicitly stated a durable cross-project preference. If nothing qualifies, create and apply a DEFER candidate with a concise reason so the job reaches a terminal audited state.
+For each survivor, search related project and global memories first. Classify it as ADD, REAFFIRM, MERGE, SUPERSEDE, COEXIST, CONTRADICT, or DEFER. A new fact that replaces an incompatible current fact MUST use SUPERSEDE against that target, never a parallel ADD. Write bounded patch JSON under /tmp.
+
+Project memory: create a candidate linked to journal job ${job.id} and apply it only when provenance and current source/target hashes validate.
+
+Global memory: only explicit durable cross-project user preferences or corrections qualify. Create the candidate under ~/.agents/memory/global using the session path and SHA-256 as source/provenance; never approve or apply it. Global writes require later human approval. Then create and apply a linked project DEFER candidate recording that the global proposal awaits approval, so this journal job reaches a terminal audited state.
+
+If nothing qualifies, create and apply a DEFER candidate with a concise reason so the job reaches a terminal audited state.
 
 Finish with a terse summary of candidate IDs and terminal job status. Do not modify the project repository.`;
 }
