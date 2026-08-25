@@ -34,15 +34,15 @@ describe("background agent handoff truncation", () => {
 	});
 
 	it("caps the complete status envelope", () => {
-		const output = truncateUtf8(`agent: scout\nstatus: complete\n\n${"x".repeat(500)}`, 96);
-		expect(output).toMatch(/^agent: scout\nstatus: complete/);
+		const output = truncateUtf8(`agent: worker\nstatus: complete\n\n${"x".repeat(500)}`, 96);
+		expect(output).toMatch(/^agent: worker\nstatus: complete/);
 		expect(Buffer.byteLength(output)).toBeLessThanOrEqual(96);
 	});
 
 	it("bounds persisted task and output", () => {
 		const snapshot = snapshotRun({
 			id: "abcd1234",
-			agent: "scout",
+			agent: "worker",
 			task: "t".repeat(10_000),
 			cwd: "/tmp",
 			status: "complete",

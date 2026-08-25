@@ -133,7 +133,7 @@ The tool intentionally has only three parameters:
 
 | Parameter | Purpose |
 | --- | --- |
-| `agent` | `scout`, `planner`, `reviewer`, `worker`, or a user-defined agent |
+| `agent` | `reviewer`, `worker`, or a user-defined agent |
 | `task` | Independent work to perform |
 | `cwd` | Optional child working directory; defaults to the parent CWD |
 
@@ -155,10 +155,8 @@ Normal operation remains push-based: use control only when the user asks for sta
 
 | Agent | Purpose | Tools |
 | --- | --- | --- |
-| `scout` | Fast repository reconnaissance and compressed handoff | Read-only discovery plus shell inspection |
-| `planner` | Concrete implementation planning | Read-only repository tools |
-| `reviewer` | Evidence-first changed-code review | Read-only repository tools and deterministic review helpers |
-| `worker` | Autonomous implementation in an isolated context | Pi defaults |
+| `reviewer` | Evidence-first review of concrete Git changes | Pi defaults plus deterministic review helpers; remains read-only by instruction |
+| `worker` | General-purpose independent work in an isolated context | Pi defaults, matching the parent tool surface |
 
 User agents in `~/.pi/agent/agents/*.md` override bundled agents with the same name. Each child inherits the parent's active model and thinking level unless its agent definition pins a model.
 

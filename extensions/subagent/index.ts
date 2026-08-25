@@ -18,7 +18,7 @@ const HANDOFF_INSTRUCTION =
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 const BackgroundAgentParams = Type.Object({
-	agent: Type.String({ description: "scout, planner, reviewer, worker, or a user agent" }),
+	agent: Type.String({ description: "reviewer, worker, or a user agent" }),
 	task: Type.String({ description: "Independent task to run" }),
 	cwd: Type.Optional(Type.String({ description: "Child working directory; defaults to the parent CWD" })),
 	model: Type.Optional(
@@ -412,7 +412,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		name: "background_agent",
 		label: "Background Agent",
 		description:
-			"Run independent work asynchronously. Returns a short ID; completion is pushed automatically and durably. Never poll unless asked. Bundled: scout, planner, reviewer, worker.",
+			"Run independent work asynchronously. Returns a short ID; completion is pushed automatically and durably. Never poll unless asked. Bundled: reviewer, worker.",
 		promptGuidelines: [
 			"Default to direct inspection and execution. Do not use background_agent for small, bounded tasks that the parent can handle with a few targeted tool calls.",
 			"Use background_agent only when work is genuinely independent and substantial enough that parallelism, isolated context, or specialized review materially improves the result.",
