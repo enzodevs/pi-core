@@ -33,6 +33,7 @@
 			"./extensions/draft-toggle/index.ts",
 			"./extensions/image-clipboard/index.ts",
 			"./extensions/monitor/index.ts",
+			"./extensions/memory/index.ts",
 			"./extensions/sudo/index.ts"
 		]
 	},

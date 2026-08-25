@@ -118,6 +118,14 @@ Profiles and the generated metadata index live at:
 ~/.pi/agent/pi-core/skill-index.json
 ```
 
+## Memory context
+
+Pi Core integrates with the portable `agent-memory` CLI without adding an always-active model tool. On the first submitted prompt of each session, it searches project and global memory in parallel and injects at most three strong results as hidden, explicitly untrusted historical evidence. The handoff is capped at 4 KiB and persists in session context, so later turns do not repeat retrieval.
+
+On session shutdown, Pi Core idempotently enqueues the session path and content hash for external consolidation. Session transcripts are not copied into canonical memory. `agent-memory` remains responsible for Markdown truth, SQLite FTS/vector indexes, temporal metadata, candidates, provenance, and atomic application.
+
+If `agent-memory` is missing, the project has no initialized memory, or retrieval fails, Pi continues without injected context. Manual memory maintenance remains available through the portable agent-memory skill and CLI.
+
 ## Background agents
 
 The `background_agent` tool delegates independent work without blocking the parent session. Each run receives a short ID and is managed through a durable RPC-backed lifecycle.
