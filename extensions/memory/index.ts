@@ -9,7 +9,7 @@ import {
 } from "./consolidator.ts";
 import { formatMemoryContext, mergeMemoryHits, parseMemoryHits } from "./context.ts";
 
-const SEARCH_TIMEOUT_MS = 3_000;
+const SEARCH_TIMEOUT_MS = 1_500;
 const JOURNAL_TIMEOUT_MS = 2_000;
 const MEMORY_MESSAGE_TYPE = "pi-core-memory-context";
 const EMBEDDING_ARGS = [
