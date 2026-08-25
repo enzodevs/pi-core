@@ -12,9 +12,9 @@ export const RECAP_WIDGET_KEY = "pi-core-recap";
 export const RECAP_MODEL_PROVIDER = "openai-codex";
 export const RECAP_MODEL_ID = "gpt-5.3-codex-spark";
 export const RECAP_PROMPT =
-	"Recap where this conversation left off in one short sentence so the user can resume after stepping away. Keep it concise, complete, and untruncated. No preamble or markdown.";
+	"Recap where this conversation left off in at most three ultra-short phrases: task; progress; next step. Use 12 words or fewer total. Output one line with no preamble or markdown.";
 export const RECAP_SYSTEM_PROMPT =
-	"Produce one terse factual recap line describing the user's task, completed work, and immediate next step. Do not use tools, preambles, markdown, or quotes.";
+	"Produce one factual recap line of at most three terse phrases and 12 words total. Include only the task, progress, and immediate next step when known. Do not use tools, full sentences, preambles, markdown, or quotes.";
 
 export function recapMessages(messages: unknown[]): ReturnType<typeof convertToLlm> {
 	return convertToLlm(messages as Parameters<typeof convertToLlm>[0]);

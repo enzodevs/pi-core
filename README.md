@@ -120,9 +120,9 @@ Profiles and the generated metadata index live at:
 
 ## Memory context
 
-Pi Core integrates with the portable `agent-memory` CLI without adding an always-active model tool. On the first submitted prompt of each session, it searches project and global memory in parallel and injects at most three strong results as hidden, explicitly untrusted historical evidence. The handoff is capped at 4 KiB and persists in session context, so later turns do not repeat retrieval.
+Pi Core integrates with the portable `agent-memory` CLI without adding an always-active model tool. On the first submitted prompt of each session, it searches project and global memory sequentially and injects at most three strong results as hidden, explicitly untrusted historical evidence. The handoff is capped at 4 KiB and persists in session context, so later turns do not repeat retrieval.
 
-On session shutdown, Pi Core idempotently enqueues the session path and content hash for external consolidation. Session transcripts are not copied into canonical memory. `agent-memory` remains responsible for Markdown truth, SQLite FTS/vector indexes, temporal metadata, candidates, provenance, and atomic application.
+On session shutdown, Pi Core idempotently enqueues the session path and content hash without copying its transcript into canonical memory. After the next foreground run settles, one detached `openai-codex/gpt-5.6-terra` process at medium reasoning consolidates the oldest pending job through validated `agent-memory` candidates. A private lock prevents concurrent consolidators, the run is capped at 15 minutes, and a dedicated system prompt requires all memory writes to pass through the validated CLI. `agent-memory` remains responsible for Markdown truth, SQLite FTS/vector indexes, temporal metadata, candidates, provenance, stale-source checks, and atomic application.
 
 If `agent-memory` is missing, the project has no initialized memory, or retrieval fails, Pi continues without injected context. Manual memory maintenance remains available through the portable agent-memory skill and CLI.
 
@@ -224,7 +224,7 @@ Rendering performs no filesystem, Git, network, or history scans. Git updates us
 
 ## Idle recap
 
-After Pi settles and remains idle for three minutes, Pi Core generates one short sentence describing the task, completed work, and immediate next step. It appears quietly below the editor and disappears when work resumes.
+After Pi settles and remains idle for three minutes, Pi Core generates one compact line of up to three terse phrases describing the task, progress, and immediate next step. It appears quietly below the editor and disappears when work resumes.
 
 The recap prefers the authenticated `openai-codex/gpt-5.3-codex-spark` model at low reasoning and falls back to the active session model if Spark is unavailable or a Spark request fails. It exposes no tools and is never written to session history or added to model context. Stale or cancelled results are discarded. Pi extensions cannot observe raw editor keystrokes, so the timer resets on submitted input and agent/session activity rather than cursor movement.
 

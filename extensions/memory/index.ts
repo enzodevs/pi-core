@@ -1,6 +1,12 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+	CONSOLIDATION_MODEL,
+	CONSOLIDATION_PROVIDER,
+	firstPendingJob,
+	launchConsolidator,
+} from "./consolidator.ts";
 import { formatMemoryContext, mergeMemoryHits, parseMemoryHits } from "./context.ts";
 
 const SEARCH_TIMEOUT_MS = 10_000;
@@ -19,13 +25,16 @@ const EMBEDDING_ARGS = [
 
 export default function memoryContext(pi: ExtensionAPI): void {
 	let openingLookupAttempted = false;
+	let consolidationAttempted = false;
+	const isConsolidator = process.env.PI_CORE_MEMORY_CONSOLIDATOR === "1";
 
 	pi.on("session_start", () => {
 		openingLookupAttempted = false;
+		consolidationAttempted = false;
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (openingLookupAttempted || !event.prompt.trim()) return;
+		if (isConsolidator || openingLookupAttempted || !event.prompt.trim()) return;
 		openingLookupAttempted = true;
 
 		const common = ["search", event.prompt, "--json", "--limit", "3", ...EMBEDDING_ARGS];
@@ -55,7 +64,23 @@ export default function memoryContext(pi: ExtensionAPI): void {
 		};
 	});
 
+	pi.on("agent_settled", async (_event, ctx) => {
+		if (isConsolidator || consolidationAttempted || !ctx.isIdle()) return;
+		consolidationAttempted = true;
+		const model = ctx.modelRegistry.find(CONSOLIDATION_PROVIDER, CONSOLIDATION_MODEL);
+		if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) return;
+		const pending = await pi.exec(
+			"agent-memory",
+			["--from", ctx.cwd, "journal", "list", "--status", "pending", "--json"],
+			{ timeout: JOURNAL_TIMEOUT_MS },
+		);
+		if (pending.code !== 0) return;
+		const job = firstPendingJob(pending.stdout);
+		if (job) launchConsolidator(job, ctx.cwd);
+	});
+
 	pi.on("session_shutdown", async (_event, ctx) => {
+		if (isConsolidator) return;
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		if (!sessionFile) return;
 		await pi.exec(
