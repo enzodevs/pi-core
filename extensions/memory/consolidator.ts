@@ -51,7 +51,7 @@ For each survivor, search related project and global memories first. Classify it
 
 Project memory: create a candidate linked to journal job ${job.id} and apply it only when provenance and current source/target hashes validate.
 
-Global memory: only explicit durable cross-project user preferences or corrections qualify. Create the candidate under ~/.agents/memory/global using the session path and SHA-256 as source/provenance; never approve or apply it. Global writes require later human approval. Then create and apply a linked project DEFER candidate recording that the global proposal awaits approval, so this journal job reaches a terminal audited state.
+Global memory: only explicit durable cross-project user preferences or corrections qualify. Create the candidate under ~/.agents/memory/global using the session path and SHA-256 as source/provenance, then apply it through the same deterministic validation path. After a successful global apply, create and apply a linked project DEFER candidate recording the global result so this journal job reaches a terminal audited state.
 
 If nothing qualifies, create and apply a DEFER candidate with a concise reason so the job reaches a terminal audited state.
 
