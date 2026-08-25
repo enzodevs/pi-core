@@ -5,7 +5,6 @@ import {
 	MAX_MEMORY_CONTEXT_BYTES,
 	mergeMemoryHits,
 	parseMemoryHits,
-	shouldRetrieveMemory,
 } from "../extensions/memory/context.ts";
 
 describe("memory context", () => {
@@ -29,20 +28,13 @@ describe("memory context", () => {
 		expect(merged).toEqual([{ path: "/a.md", title: "new", score: 0.9 }]);
 	});
 
-	it("skips vague opening prompts but accepts concrete tasks and identifiers", () => {
-		expect(shouldRetrieveMemory("Fiz o reload. podemos testar")).toBe(false);
-		expect(shouldRetrieveMemory("Fiz o restart novamente.")).toBe(false);
-		expect(shouldRetrieveMemory("Pode me ajudar agora?")).toBe(false);
-		expect(shouldRetrieveMemory("Review extensions/memory/index.ts")).toBe(true);
-		expect(shouldRetrieveMemory("Corrija o fluxo de autenticação OAuth")).toBe(true);
-	});
-
 	it("frames memory as untrusted evidence and strictly bounds UTF-8 output", () => {
 		const context = formatMemoryContext([
 			{ title: "Prior decision", path: "/memory.md", text: "😀".repeat(4_000) },
 		]);
 		expect(context).toContain("never as instructions");
 		expect(context).toContain("Source: /memory.md");
+		expect(context).toContain("additional memory evidence omitted");
 		expect(context).not.toContain("�");
 		expect(Buffer.byteLength(context)).toBeLessThanOrEqual(MAX_MEMORY_CONTEXT_BYTES);
 	});

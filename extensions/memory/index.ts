@@ -7,9 +7,9 @@ import {
 	firstPendingJob,
 	launchConsolidator,
 } from "./consolidator.ts";
-import { formatMemoryContext, mergeMemoryHits, parseMemoryHits, shouldRetrieveMemory } from "./context.ts";
+import { formatMemoryContext, mergeMemoryHits, parseMemoryHits } from "./context.ts";
 
-const SEARCH_TIMEOUT_MS = 10_000;
+const SEARCH_TIMEOUT_MS = 3_000;
 const JOURNAL_TIMEOUT_MS = 2_000;
 const MEMORY_MESSAGE_TYPE = "pi-core-memory-context";
 const EMBEDDING_ARGS = [
@@ -21,23 +21,23 @@ const EMBEDDING_ARGS = [
 	"256",
 	"--embedding-batch-size",
 	"1",
+	"--min-score",
+	"0.84",
 ] as const;
 
 export default function memoryContext(pi: ExtensionAPI): void {
 	let openingLookupAttempted = false;
-	let consolidationAttempted = false;
 	const isConsolidator = process.env.PI_CORE_MEMORY_CONSOLIDATOR === "1";
 
 	pi.on("session_start", () => {
 		openingLookupAttempted = false;
-		consolidationAttempted = false;
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (isConsolidator || openingLookupAttempted || !shouldRetrieveMemory(event.prompt)) return;
+		if (isConsolidator || openingLookupAttempted || !event.prompt.trim()) return;
 		openingLookupAttempted = true;
 
-		const common = ["search", event.prompt, "--json", "--limit", "3", ...EMBEDDING_ARGS];
+		const common = ["search", event.prompt, "--json", "--limit", "2", ...EMBEDDING_ARGS];
 		const globalRoot = path.join(os.homedir(), ".agents", "memory", "global");
 		// The local embedding server is intentionally single-slot. Run searches
 		// sequentially so project and global cache misses cannot overload the same
@@ -64,9 +64,17 @@ export default function memoryContext(pi: ExtensionAPI): void {
 		};
 	});
 
-	pi.on("agent_settled", async (_event, ctx) => {
-		if (isConsolidator || consolidationAttempted || !ctx.isIdle()) return;
-		consolidationAttempted = true;
+	pi.on("session_shutdown", async (_event, ctx) => {
+		if (isConsolidator) return;
+		const sessionFile = ctx.sessionManager.getSessionFile();
+		if (!sessionFile) return;
+		const enqueued = await pi.exec(
+			"agent-memory",
+			["--from", ctx.cwd, "journal", "enqueue", "--session", sessionFile, "--project", ctx.cwd, "--json"],
+			{ timeout: JOURNAL_TIMEOUT_MS },
+		);
+		if (enqueued.code !== 0) return;
+
 		const model = ctx.modelRegistry.find(CONSOLIDATION_PROVIDER, CONSOLIDATION_MODEL);
 		if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) return;
 		const pending = await pi.exec(
@@ -77,16 +85,5 @@ export default function memoryContext(pi: ExtensionAPI): void {
 		if (pending.code !== 0) return;
 		const job = firstPendingJob(pending.stdout);
 		if (job) launchConsolidator(job, ctx.cwd);
-	});
-
-	pi.on("session_shutdown", async (_event, ctx) => {
-		if (isConsolidator) return;
-		const sessionFile = ctx.sessionManager.getSessionFile();
-		if (!sessionFile) return;
-		await pi.exec(
-			"agent-memory",
-			["--from", ctx.cwd, "journal", "enqueue", "--session", sessionFile, "--project", ctx.cwd, "--json"],
-			{ timeout: JOURNAL_TIMEOUT_MS },
-		);
 	});
 }

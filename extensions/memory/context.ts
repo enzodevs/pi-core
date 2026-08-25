@@ -1,35 +1,8 @@
 import { Buffer } from "node:buffer";
 
-export const MAX_MEMORY_CONTEXT_BYTES = 3 * 1024;
-const MAX_MEMORY_HITS = 3;
-const MAX_HIT_TEXT_BYTES = 720;
-const GENERIC_OPENING_TERMS = new Set([
-	"reload",
-	"recarreguei",
-	"restart",
-	"restarted",
-	"reiniciei",
-	"reiniciar",
-	"novamente",
-	"again",
-	"fiz",
-	"feito",
-	"done",
-	"test",
-	"testar",
-	"teste",
-	"testing",
-	"podemos",
-	"pode",
-	"ajudar",
-	"help",
-	"please",
-	"quero",
-	"agora",
-	"pronto",
-	"ready",
-	"ok",
-]);
+export const MAX_MEMORY_CONTEXT_BYTES = 1536;
+const MAX_MEMORY_HITS = 2;
+const MAX_HIT_TEXT_BYTES = 480;
 
 export interface MemoryHit {
 	path?: string;
@@ -68,15 +41,6 @@ export function mergeMemoryHits(
 	return [...byIdentity.values()]
 		.sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
 		.slice(0, limit);
-}
-
-export function shouldRetrieveMemory(prompt: string): boolean {
-	const terms = prompt
-		.toLowerCase()
-		.split(/[^\p{L}\p{N}_./-]+/u)
-		.map((term) => term.trim().replace(/^[._/-]+|[._/-]+$/g, ""))
-		.filter((term) => term.length >= 3 && !GENERIC_OPENING_TERMS.has(term));
-	return terms.length >= 2 || terms.some((term) => /[./_-]/.test(term) || /\d/.test(term));
 }
 
 function boundedUtf8(text: string, maxBytes: number): string {
