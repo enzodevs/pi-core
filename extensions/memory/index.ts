@@ -6,6 +6,7 @@ import {
 	CONSOLIDATION_PROVIDER,
 	firstPendingJob,
 	launchConsolidator,
+	shouldEnqueueSession,
 } from "./consolidator.ts";
 import { formatMemoryContext, mergeMemoryHits, parseMemoryHits } from "./context.ts";
 
@@ -150,8 +151,8 @@ export default function memoryContext(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.on("session_shutdown", async (_event, ctx) => {
-		if (isConsolidator) return;
+	pi.on("session_shutdown", async (event, ctx) => {
+		if (isConsolidator || !shouldEnqueueSession(event.reason)) return;
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		if (!sessionFile) return;
 		const enqueued = await pi.exec(

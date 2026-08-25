@@ -32,8 +32,12 @@ export function firstPendingJob(stdout: string): JournalJob | undefined {
 	}
 }
 
+export function shouldEnqueueSession(reason: string): boolean {
+	return reason !== "reload";
+}
+
 export function consolidationPrompt(job: JournalJob, cwd: string): string {
-	return `Consolidate one queued Pi session into durable agent memory.
+	return `Consolidate queued Pi sessions into durable agent memory. Process at most four jobs in this run, starting with the supplied job, then repeatedly listing and selecting the oldest remaining pending job.
 
 Project: ${cwd}
 Journal job: ${job.id}
@@ -51,7 +55,7 @@ Global memory: only explicit durable cross-project user preferences or correctio
 
 If nothing qualifies, create and apply a DEFER candidate with a concise reason so the job reaches a terminal audited state.
 
-Finish with a terse summary of candidate IDs and terminal job status. Do not modify the project repository.`;
+After each job reaches a terminal state, list pending jobs and continue until none remain or four total jobs have been processed. Finish with a terse summary of candidate IDs and terminal job statuses. Do not modify the project repository.`;
 }
 
 function acquireLock(lock: string): boolean {
