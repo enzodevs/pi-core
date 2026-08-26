@@ -1,7 +1,7 @@
 {
 	"name": "@rrghost/pi-core",
 	"version": "0.1.0",
-	"description": "Lean skill visibility, background agents, and OpenAI Fast mode for the Pi coding agent",
+	"description": "Lean skill visibility, session utilities, and OpenAI Fast mode for the Pi coding agent",
 	"license": "MIT",
 	"author": "Enzo Cambraia",
 	"homepage": "https://github.com/enzodevs/pi-core#readme",
@@ -18,12 +18,16 @@
 	],
 	"files": [
 		"extensions",
+		"skills",
 		"themes",
 		"CONTEXT-HYGIENE.md",
 		"LICENSE",
 		"README.md"
 	],
 	"pi": {
+		"skills": [
+			"./skills/analyze-sessions"
+		],
 		"themes": [
 			"./themes/interstellar.json"
 		],
@@ -31,7 +35,6 @@
 			"./extensions/skill-manager/index.ts",
 			"./extensions/fast-mode/index.ts",
 			"./extensions/file-autocomplete/index.ts",
-			"./extensions/subagent/index.ts",
 			"./extensions/footer/index.ts",
 			"./extensions/interstellar/index.ts",
 			"./extensions/recap/index.ts",

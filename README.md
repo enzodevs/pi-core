@@ -15,7 +15,7 @@
 <p align="center">
   <a href="#quickstart"><strong>Quickstart</strong></a> ·
   <a href="#skill-visibility"><strong>Skills</strong></a> ·
-  <a href="#background-agents"><strong>Agents</strong></a> ·
+  <a href="#session-analytics"><strong>Analytics</strong></a> ·
   <a href="#background-monitors"><strong>Monitors</strong></a> ·
   <a href="#temporary-sudo"><strong>Sudo</strong></a> ·
   <a href="#minimal-footer"><strong>Footer</strong></a> ·
@@ -25,18 +25,16 @@
   <a href="CONTEXT-HYGIENE.md"><strong>Context hygiene</strong></a>
 </p>
 
-**Pi Core** adds three focused capabilities to [Pi](https://pi.dev): per-project skill visibility, webhook-style background agents, and an OpenAI Codex Fast mode toggle. It is deliberately small, Node-native, and designed around one constraint most agent tooling treats as an afterthought: **everything placed in context has a recurring cost**.
+**Pi Core** is a lean, Node-native control layer for [Pi](https://pi.dev): per-project skill visibility, durable memory, session analytics, background monitors, focused TUI improvements, and an OpenAI Codex Fast mode toggle. It is designed around one constraint most agent tooling treats as an afterthought: **everything placed in context has a recurring cost**.
 
-No job dashboard. No polling loop. No sprawling tool catalog. Intermediate work stays outside the parent context, and only bounded, decision-ready results come back.
+No polling loop. No sprawling always-active tool catalog. Variable output is bounded, and intermediate work stays outside the parent context.
 
 ## Why Pi Core
 
 | Problem | Pi Core's answer |
 | --- | --- |
 | Every skill inflates every prompt | Choose `full`, `name`, `searchable`, or `off` per working directory |
-| Delegated work blocks the conversation | Start isolated Pi agents and push their result back when complete |
-| Child transcripts pollute the parent | Return only the final handoff, capped at 12 KiB |
-| Project agents miss local instructions | Launch children with an explicit `cwd` so Pi discovers project context |
+| Old sessions are hard to inspect | Search transcripts and report cost, errors, models, and prompt patterns on demand |
 | Fast mode requires restarting or hidden config | Toggle priority processing live with `/fast` |
 | Tool catalogs grow without discipline | Enforce a written context-hygiene policy for schemas and outputs |
 
@@ -44,11 +42,9 @@ No job dashboard. No polling loop. No sprawling tool catalog. Intermediate work 
 
 - **Exact-CWD skill profiles** — sessions in the same directory share one visibility policy.
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
-- **True background delegation** — child Pi processes return immediately and report completion through the parent session.
+- **Read-only session analytics** — inspect cost, transcripts, errors, and prompt patterns without an always-active tool.
 - **Model-free background monitoring** — watch CI, deployments, or long commands and receive one durable completion without polling.
 - **Temporary sudo** — approve each privileged command and enter a masked password that exists only in session memory.
-- **Isolated agent context** — child reasoning, file reads, tool calls, usage events, and JSON streams never enter the parent conversation.
-- **Evidence-first review** — the bundled reviewer uses deterministic scope, complete changed-file accounting, candidate falsification, and a validated evidence ledger.
 - **Provider-scoped Fast mode** — injects `service_tier: "priority"` only for OAuth-backed `openai-codex` requests.
 - **Responsive minimal footer** — model, thinking, branch, context, cost, and extension state without render-time I/O.
 - **Interstellar theme** — a high-contrast deep-space palette, orbital π startup art, and a restrained animated working indicator.
@@ -128,47 +124,22 @@ On genuine session shutdown (`quit`, `new`, `resume`, or `fork`), Pi Core only e
 
 Pi Core initializes an empty project root on first use. If `agent-memory` is missing or retrieval fails, Pi continues without injected context. `/memory-status` shows bounded queue metrics; manual maintenance remains available through the portable agent-memory skill and CLI.
 
-## Background agents
+## Session analytics
 
-The `background_agent` tool delegates independent work without blocking the parent session. Each run receives a short ID and is managed through a durable RPC-backed lifecycle.
+The bundled `analyze-sessions` skill provides read-only, on-demand scripts over Pi's saved JSONL sessions. It can report cost by day, project, model, or session; search old user and assistant messages; render a session as Markdown; and extract prompts for recurring-pattern analysis. Subagent costs are included in cost totals by default, while transcript and prompt queries exclude child sessions unless requested.
 
-```text
-Parent Pi
-  └─ background_agent returns immediately
-       └─ isolated `pi --mode json --no-session` child
-            └─ concise completion pushed into the parent
+The skill adds no always-active model-facing tool. Ask Pi questions such as “what did Pi cost this week?”, “find the session about rate limits”, or “show where recent sessions hit tool errors.”
+
+### Optional interactive subagents
+
+Pi Core intentionally leaves model-backed orchestration to dedicated packages. For tmux users, [`pi-interactive-subagents`](https://github.com/amosblomqvist/pi-interactive-subagents) adds visible child panes, parent/child questions, controlled nested delegation, steering, resume, and strict per-agent tool allowlists:
+
+```bash
+pi install https://github.com/amosblomqvist/pi-interactive-subagents
+tmux new -A -s pi 'pi'
 ```
 
-The tool intentionally has only three parameters:
-
-| Parameter | Purpose |
-| --- | --- |
-| `agent` | `reviewer`, `worker`, or a user-defined agent |
-| `task` | Independent work to perform |
-| `cwd` | Optional child working directory; defaults to the parent CWD |
-
-Starting the child in `cwd` makes Pi discover that project's `AGENTS.md`/`CLAUDE.md`, settings, skills, extensions, and relative paths. Multiple calls run concurrently. Read-only agents may safely share a directory; parallel writers should receive separate Git worktrees.
-
-When a child finishes, Pi Core persists its bounded result before injecting one completion message at the next safe turn. Failed delivery remains pending, retries after the parent settles, and recovers from session entries after reload. Active children are terminated when the parent session shuts down.
-
-A second compact tool, `agent_control`, handles the exceptional cases without requiring polling:
-
-| Action | Behavior |
-| --- | --- |
-| `status` | List compact recent state, or retrieve one run and its final result |
-| `message` | Send steering guidance to a running child over Pi RPC |
-| `stop` | Abort a running child |
-
-Normal operation remains push-based: use control only when the user asks for status, interaction, or cancellation.
-
-### Bundled roles
-
-| Agent | Purpose | Tools |
-| --- | --- | --- |
-| `reviewer` | Evidence-first review of concrete Git changes | Pi defaults plus deterministic review helpers; remains read-only by instruction |
-| `worker` | General-purpose independent work in an isolated context | Pi defaults, matching the parent tool surface |
-
-User agents in `~/.pi/agent/agents/*.md` override bundled agents with the same name. Each child inherits the parent's active model and thinking level unless its agent definition pins a model.
+Do not enable Pi Core's removed legacy background-agent extension alongside it.
 
 ## Background monitors
 
@@ -199,19 +170,6 @@ The `sudo` tool runs one shell command with root privileges. Every call displays
 
 Privileged output is capped at the last 2,000 lines or 50 KiB. Larger output is written to a private temporary file. `/sudo-lock` forgets the credential immediately; session shutdown also clears it and invalidates sudo's timestamp. The tool is unavailable outside Pi's interactive TUI.
 
-## Evidence-first review
-
-The reviewer ships with its complete review procedure and Python standard-library helpers. It does more than summarize a diff:
-
-1. Freezes the requested commit, staged, or working-tree scope.
-2. Accounts for every changed file and applicable repository instruction.
-3. Generates candidate failures and actively searches for counterevidence.
-4. Separates severity from confidence and reports only validated findings.
-5. Machine-checks an evidence ledger before rendering the report.
-6. Cleans temporary review artifacts after delivery.
-
-The target repository remains read-only unless a separate worker is explicitly asked to implement fixes.
-
 ## Minimal footer
 
 Pi Core replaces the default footer with a restrained, single-line status surface:
@@ -220,7 +178,7 @@ Pi Core replaces the default footer with a restrained, single-line status surfac
 ◇ gpt-5.6-terra · low · git:main │                    ctx 18% · $0.14 · ⚡ fast
 ```
 
-It displays the active model and thinking level, Git branch, context usage, accumulated session cost, and extension statuses such as Fast mode or running background agents. The layout progressively drops cost and branch details on narrow terminals while retaining core state.
+It displays the active model and thinking level, Git branch, context usage, accumulated session cost, and extension statuses such as Fast mode. The layout progressively drops cost and branch details on narrow terminals while retaining core state.
 
 Rendering performs no filesystem, Git, network, or history scans. Git updates use Pi's footer watcher, cost is accumulated from message events, and width-safe Unicode characters avoid a Nerd Font dependency.
 
@@ -282,12 +240,9 @@ flowchart LR
     Pi[Parent Pi session] --> Skills[Skill visibility]
     Pi --> Footer[Minimal reactive footer]
     Pi --> Fast[Fast-mode request hook]
-    Pi --> Agent[Background agent tool]
+    Pi --> Analytics[On-demand session analytics]
     Skills --> Store[(~/.pi/agent/pi-core)]
-    Agent --> Child[Isolated Pi subprocess]
-    Child --> Project[Project cwd + instructions]
-    Child --> Handoff[Bounded final handoff]
-    Handoff --> Pi
+    Analytics --> Sessions[(Pi session JSONL)]
 ```
 
 ## Development
