@@ -43,7 +43,8 @@
 			"./extensions/monitor/index.ts",
 			"./extensions/memory/index.ts",
 			"./extensions/sudo/index.ts",
-			"./extensions/ask-user-question/index.ts"
+			"./extensions/ask-user-question/index.ts",
+			"./extensions/subagent/index.ts"
 		]
 	},
 	"scripts": {

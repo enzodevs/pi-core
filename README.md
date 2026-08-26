@@ -16,6 +16,7 @@
   <a href="#quickstart"><strong>Quickstart</strong></a> ·
   <a href="#skill-visibility"><strong>Skills</strong></a> ·
   <a href="#session-analytics"><strong>Analytics</strong></a> ·
+  <a href="#background-subagents"><strong>Subagents</strong></a> ·
   <a href="#background-monitors"><strong>Monitors</strong></a> ·
   <a href="#ask-the-user"><strong>Questions</strong></a> ·
   <a href="#temporary-sudo"><strong>Sudo</strong></a> ·
@@ -26,7 +27,7 @@
   <a href="CONTEXT-HYGIENE.md"><strong>Context hygiene</strong></a>
 </p>
 
-**Pi Core** is a lean, Node-native control layer for [Pi](https://pi.dev): per-project skill visibility, durable memory, session analytics, background monitors, focused TUI improvements, and an OpenAI Codex Fast mode toggle. It is designed around one constraint most agent tooling treats as an afterthought: **everything placed in context has a recurring cost**.
+**Pi Core** is a lean, Node-native control layer for [Pi](https://pi.dev): per-project skill visibility, durable memory, session analytics, portable background subagents and monitors, focused TUI improvements, and an OpenAI Codex Fast mode toggle. It is designed around one constraint most agent tooling treats as an afterthought: **everything placed in context has a recurring cost**.
 
 No polling loop. No sprawling always-active tool catalog. Variable output is bounded, and intermediate work stays outside the parent context.
 
@@ -44,6 +45,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Exact-CWD skill profiles** — sessions in the same directory share one visibility policy.
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
 - **Read-only session analytics** — inspect cost, transcripts, errors, and prompt patterns without an always-active tool.
+- **Portable background subagents** — run isolated Pi agents over RPC, including bounded direct-parent questions and controlled nesting, without requiring tmux.
 - **Model-free background monitoring** — watch CI, deployments, or long commands and receive one durable completion without polling.
 - **Interactive questions** — ask for bounded free text, one choice, or multiple choices without guessing.
 - **Temporary sudo** — approve each privileged command and enter a masked password that exists only in session memory.
@@ -132,16 +134,30 @@ The bundled `analyze-sessions` skill provides read-only, on-demand scripts over 
 
 The skill adds no always-active model-facing tool. Ask Pi questions such as “what did Pi cost this week?”, “find the session about rate limits”, or “show where recent sessions hit tool errors.”
 
-### Optional interactive subagents
+## Background subagents
 
-Pi Core intentionally leaves model-backed orchestration to dedicated packages. For tmux users, [`pi-interactive-subagents`](https://github.com/amosblomqvist/pi-interactive-subagents) adds visible child panes, parent/child questions, controlled nested delegation, steering, resume, and strict per-agent tool allowlists:
+`background_agent` starts an isolated Pi process in RPC mode and returns a short run ID immediately. The parent remains free to work; one bounded final handoff is pushed back durably when the child settles. `agent_control` lists compact status, steers a running direct child, replies to a pending question, or stops it. RPC supervision is authoritative and works in interactive Pi or a long-lived headless RPC parent without tmux.
 
-```bash
-pi install https://github.com/amosblomqvist/pi-interactive-subagents
-tmux new -A -s pi 'pi'
+A child receives the child-only `ask_parent` tool. It can send one concise blocking question, end its turn, and remain alive. Its direct parent receives a bounded notification and replies with:
+
+```text
+agent_control(action="reply", id="<run-id>", message="<answer>")
 ```
 
-Do not enable Pi Core's removed legacy background-agent extension alongside it.
+Agent definitions can opt into nested delegation with `children` frontmatter. The bundled `worker` may delegate to `reviewer`; `reviewer` cannot delegate. Each spawn must name a discoverable profile and, below the top level, appear in the caller's pinned child allowlist. Lineage and direct ownership are validated at every depth, explicit tool lists remain restrictive while adding only required control tools, and a parent cannot control grandchildren.
+
+```markdown
+---
+name: coordinator
+description: Coordinates implementation and review
+tools: read, bash
+children: worker, reviewer
+---
+```
+
+Limits default to depth 3, four children per parent run, four globally concurrent children, 8 KiB tasks, 12 KiB handoffs, 1 KiB questions, and 2 KiB replies. They can be configured before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_MAX_CHILDREN`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
+
+When Pi is already inside tmux and the `tmux` binary is available, each active child gets a best-effort observation pane showing concise lifecycle status. The pane is not an input or control channel; closing it has no effect on the child, tmux failures are ignored, and all behavior continues through RPC. Child sessions are intentionally ephemeral: active children are cancelled on parent shutdown or branch changes, and reload restores terminal records while marking interrupted work failed rather than silently resuming with stale permissions.
 
 ## Background monitors
 
@@ -253,10 +269,15 @@ State persists at:
 ```mermaid
 flowchart LR
     Pi[Parent Pi session] --> Skills[Skill visibility]
+    Pi --> Agents[RPC subagent supervisor]
+    Agents --> Child[Isolated child Pi]
+    Child --> Nested[Allowed named child]
+    Agents -. optional status .-> Tmux[tmux observation pane]
     Pi --> Footer[Minimal reactive footer]
     Pi --> Fast[Fast-mode request hook]
     Pi --> Analytics[On-demand session analytics]
     Skills --> Store[(~/.pi/agent/pi-core)]
+    Agents --> Store
     Analytics --> Sessions[(Pi session JSONL)]
 ```
 
