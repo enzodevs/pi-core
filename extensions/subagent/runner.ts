@@ -12,6 +12,8 @@ import { createTmuxObserver } from "./tmux.ts";
 const HANDOFF_INSTRUCTION =
 	"Return only a concise final handoff: findings, exact file references, and actionable conclusions. Omit narration, tool transcripts, and repeated task text.";
 
+export const SUBAGENT_EXTENSION_PATH = path.join(import.meta.dirname, "index.ts");
+
 export interface ChildHandle {
 	abort(): void;
 	message(text: string): void;
@@ -85,8 +87,12 @@ export function buildChildTools(agent: AgentConfig, lineage: ChildLineage): stri
 	return [...tools];
 }
 
-export async function runRpcAgent(options: RunRpcAgentOptions): Promise<string> {
-	const args = ["--mode", "rpc", "--no-session"];
+export function buildChildArgs(
+	options: Pick<RunRpcAgentOptions, "agent" | "ctx" | "lineage" | "model" | "thinking">,
+	systemPromptFile: string,
+	extensionPath = SUBAGENT_EXTENSION_PATH,
+): string[] {
+	const args = ["--mode", "rpc", "--no-session", "--extension", path.resolve(extensionPath)];
 	const model =
 		options.model ??
 		options.agent.model ??
@@ -96,9 +102,13 @@ export async function runRpcAgent(options: RunRpcAgentOptions): Promise<string> 
 	if (thinking) args.push("--thinking", thinking);
 	const tools = buildChildTools(options.agent, options.lineage);
 	if (tools) args.push("--tools", tools.join(","));
+	args.push("--append-system-prompt", systemPromptFile);
+	return args;
+}
 
+export async function runRpcAgent(options: RunRpcAgentOptions): Promise<string> {
 	const temp = await writeSystemPrompt(options.agent);
-	args.push("--append-system-prompt", temp.file);
+	const args = buildChildArgs(options, temp.file);
 	const observer = createTmuxObserver({ id: options.lineage.runId, agent: options.agent.name });
 
 	try {

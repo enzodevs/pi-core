@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
+import { AskParentTurnGate, currentAssistantMessage } from "./ask-parent-gate.ts";
 import { assertBoundedText, resolveSubagentLimits, truncateUtf8 as truncateToLimit } from "./limits.ts";
 import {
 	ASK_PARENT_PROTOCOL,
@@ -373,6 +374,8 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 	});
 
 	if (childLineage) {
+		const askParentGate = new AskParentTurnGate();
+		pi.on("tool_call", (event, ctx) => askParentGate.intercept(event, currentAssistantMessage(ctx)));
 		pi.on("input", () => {
 			questionOpen = false;
 		});
@@ -384,11 +387,13 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				"Use ask_parent instead of guessing when one decision materially blocks the child task.",
 			],
 			parameters: AskParentParams,
-			async execute(_toolCallId, params) {
+			executionMode: "sequential",
+			async execute(_toolCallId, params, _signal, _update, ctx) {
 				if (questionOpen) throw new Error("A parent question is already pending.");
 				const question = assertBoundedText(params.question, "question", limits.questionBytes);
 				questionOpen = true;
 				const id = newRunId();
+				ctx.abort();
 				return {
 					content: [{ type: "text", text: "Question sent. End this turn and wait for the parent reply." }],
 					details: { protocol: ASK_PARENT_PROTOCOL, id, question },

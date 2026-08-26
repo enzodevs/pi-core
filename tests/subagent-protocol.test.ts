@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { AgentConfig } from "../extensions/subagent/agents.js";
 import { DEFAULT_SUBAGENT_LIMITS } from "../extensions/subagent/limits.js";
@@ -13,7 +16,12 @@ import {
 	ownsDirectChild,
 	RpcEventTracker,
 } from "../extensions/subagent/protocol.js";
-import { buildChildTools, parentReplyCommand } from "../extensions/subagent/runner.js";
+import {
+	buildChildArgs,
+	buildChildTools,
+	parentReplyCommand,
+	SUBAGENT_EXTENSION_PATH,
+} from "../extensions/subagent/runner.js";
 
 const registryPath = "/tmp/pi-core-test-concurrency.json";
 const first = createChildLineage({
@@ -134,6 +142,36 @@ describe("subagent lineage and delegation", () => {
 			"read",
 			"ask_parent",
 		]);
+	});
+
+	it.each([
+		"/repo/.pi/extensions/pi-core/extensions/subagent/index.ts",
+		"/tmp/pi-package-install-123/extensions/subagent/index.ts",
+	])("explicitly loads a %s parent extension while retaining the child tool allowlist", (extensionPath) => {
+		const ctx = {
+			model: { provider: "openai", id: "gpt-test" },
+			thinkingLevel: "high",
+		} as ExtensionContext;
+		const args = buildChildArgs({ agent: agent(), ctx, lineage: first }, "/tmp/system.md", extensionPath);
+		const extensionIndex = args.indexOf("--extension");
+		const toolsIndex = args.indexOf("--tools");
+
+		expect(args.slice(0, 3)).toEqual(["--mode", "rpc", "--no-session"]);
+		expect(args[extensionIndex + 1]).toBe(path.resolve(extensionPath));
+		expect(args[toolsIndex + 1]?.split(",")).toEqual([
+			"read",
+			"ask_parent",
+			"background_agent",
+			"agent_control",
+		]);
+		expect(args).toContain("openai/gpt-test");
+		expect(args).toContain("high");
+	});
+
+	it("resolves the explicit child extension to this loaded package instance", () => {
+		expect(path.isAbsolute(SUBAGENT_EXTENSION_PATH)).toBe(true);
+		expect(SUBAGENT_EXTENSION_PATH).toMatch(/extensions[/\\]subagent[/\\]index\.ts$/);
+		expect(fs.existsSync(SUBAGENT_EXTENSION_PATH)).toBe(true);
 	});
 });
 
