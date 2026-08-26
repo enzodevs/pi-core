@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Pi Core memory Dreamer daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=15min
+Unit=pi-core-memory-dreamer.service
+
+[Install]
+WantedBy=timers.target

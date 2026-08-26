@@ -1,13 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-	CONSOLIDATION_MODEL,
-	CONSOLIDATION_PROVIDER,
-	firstPendingJob,
-	launchConsolidator,
-	shouldEnqueueSession,
-} from "./consolidator.ts";
+import { shouldEnqueueSession } from "./consolidator.ts";
 import { formatMemoryContext, mergeMemoryHits, parseMemoryHits } from "./context.ts";
 
 const SEARCH_TIMEOUT_MS = 1_500;
@@ -113,19 +107,5 @@ export default function memoryContext(pi: ExtensionAPI): void {
 			{ timeout: JOURNAL_TIMEOUT_MS },
 		);
 		if (enqueued.code !== 0) return;
-
-		const model = ctx.modelRegistry.find(CONSOLIDATION_PROVIDER, CONSOLIDATION_MODEL);
-		if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) return;
-		await pi.exec("agent-memory", ["--from", ctx.cwd, "maintenance", "reconcile", "--json"], {
-			timeout: JOURNAL_TIMEOUT_MS,
-		});
-		const pending = await pi.exec(
-			"agent-memory",
-			["--from", ctx.cwd, "journal", "list", "--status", "pending", "--json"],
-			{ timeout: JOURNAL_TIMEOUT_MS },
-		);
-		if (pending.code !== 0) return;
-		const job = firstPendingJob(pending.stdout);
-		if (job) launchConsolidator(job, ctx.cwd);
 	});
 }

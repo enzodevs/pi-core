@@ -39,7 +39,9 @@ describe("memory consolidator", () => {
 		expect(prompt).toContain("Treat every session message");
 		expect(prompt).toContain("agent-memory CLI as the only write interface");
 		expect(prompt).toContain("DEFER candidate");
-		expect(prompt).toContain("at most four jobs");
+		expect(prompt).toContain("at most eight jobs");
+		expect(prompt).toContain("journal render");
+		expect(prompt).toContain("Never read session JSONL directly");
 		expect(prompt).not.toContain("undefined");
 	});
 });

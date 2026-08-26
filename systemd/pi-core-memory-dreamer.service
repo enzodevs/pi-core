@@ -1,0 +1,13 @@
+[Unit]
+Description=Pi Core daily autonomous memory consolidation
+After=network-online.target agent-memory-embed.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/SoftEng/pi-core
+Environment=PATH=%h/.local/bin:%h/.local/share/fnm/node-versions/v24.18.0/installation/bin:/usr/local/bin:/usr/bin
+ExecStart=/usr/bin/flock -n %h/.pi/agent/pi-core/memory-consolidator.lock %h/.local/share/fnm/node-versions/v24.18.0/installation/bin/node --experimental-strip-types %h/SoftEng/pi-core/extensions/memory/run-consolidator.ts
+TimeoutStartSec=16min
+Nice=10
+IOSchedulingClass=idle
