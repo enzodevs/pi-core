@@ -19,6 +19,7 @@
   <a href="#background-monitors"><strong>Monitors</strong></a> ·
   <a href="#temporary-sudo"><strong>Sudo</strong></a> ·
   <a href="#minimal-footer"><strong>Footer</strong></a> ·
+  <a href="#interstellar-theme"><strong>Theme</strong></a> ·
   <a href="#idle-recap"><strong>Recap</strong></a> ·
   <a href="#openai-fast-mode"><strong>Fast mode</strong></a> ·
   <a href="CONTEXT-HYGIENE.md"><strong>Context hygiene</strong></a>
@@ -50,6 +51,7 @@ No job dashboard. No polling loop. No sprawling tool catalog. Intermediate work 
 - **Evidence-first review** — the bundled reviewer uses deterministic scope, complete changed-file accounting, candidate falsification, and a validated evidence ledger.
 - **Provider-scoped Fast mode** — injects `service_tier: "priority"` only for OAuth-backed `openai-codex` requests.
 - **Responsive minimal footer** — model, thinking, branch, context, cost, and extension state without render-time I/O.
+- **Interstellar theme** — a high-contrast deep-space palette, orbital π startup art, and a restrained animated working indicator.
 - **Ephemeral idle recap** — after three quiet minutes, show one tool-free sentence describing where the conversation stopped.
 - **Node-first TypeScript** — no Bun runtime APIs and no runtime framework beyond Pi's extension surface.
 
@@ -221,6 +223,12 @@ Pi Core replaces the default footer with a restrained, single-line status surfac
 It displays the active model and thinking level, Git branch, context usage, accumulated session cost, and extension statuses such as Fast mode or running background agents. The layout progressively drops cost and branch details on narrow terminals while retaining core state.
 
 Rendering performs no filesystem, Git, network, or history scans. Git updates use Pi's footer watcher, cost is accumulated from message events, and width-safe Unicode characters avoid a Nerd Font dependency.
+
+## Interstellar theme
+
+Pi Core includes an `interstellar` theme: a calm, high-contrast deep-space palette with ice-blue navigation, warm starlight headings, and explicit success/error surfaces. Its companion extension replaces Pi's startup header with orbital π art, sets a terminal title, and uses a subtle four-frame activity indicator. It adds no model-visible tools or prompts.
+
+Select it once in Pi with `/settings` → **Theme** → `interstellar`, then run `/reload` in an existing session to apply the header extension. The theme is also discoverable from the installed package's `themes/` directory.
 
 ## Idle recap
 

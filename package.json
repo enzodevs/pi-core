@@ -18,17 +18,22 @@
 	],
 	"files": [
 		"extensions",
+		"themes",
 		"CONTEXT-HYGIENE.md",
 		"LICENSE",
 		"README.md"
 	],
 	"pi": {
+		"themes": [
+			"./themes/interstellar.json"
+		],
 		"extensions": [
 			"./extensions/skill-manager/index.ts",
 			"./extensions/fast-mode/index.ts",
 			"./extensions/file-autocomplete/index.ts",
 			"./extensions/subagent/index.ts",
 			"./extensions/footer/index.ts",
+			"./extensions/interstellar/index.ts",
 			"./extensions/recap/index.ts",
 			"./extensions/draft-toggle/index.ts",
 			"./extensions/image-clipboard/index.ts",
