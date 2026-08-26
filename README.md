@@ -17,6 +17,7 @@
   <a href="#skill-visibility"><strong>Skills</strong></a> ·
   <a href="#session-analytics"><strong>Analytics</strong></a> ·
   <a href="#background-monitors"><strong>Monitors</strong></a> ·
+  <a href="#ask-the-user"><strong>Questions</strong></a> ·
   <a href="#temporary-sudo"><strong>Sudo</strong></a> ·
   <a href="#minimal-footer"><strong>Footer</strong></a> ·
   <a href="#interstellar-theme"><strong>Theme</strong></a> ·
@@ -44,6 +45,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
 - **Read-only session analytics** — inspect cost, transcripts, errors, and prompt patterns without an always-active tool.
 - **Model-free background monitoring** — watch CI, deployments, or long commands and receive one durable completion without polling.
+- **Interactive questions** — ask for bounded free text, one choice, or multiple choices without guessing.
 - **Temporary sudo** — approve each privileged command and enter a masked password that exists only in session memory.
 - **Provider-scoped Fast mode** — injects `service_tier: "priority"` only for OAuth-backed `openai-codex` requests.
 - **Responsive minimal footer** — model, thinking, branch, context, cost, and extension state without render-time I/O.
@@ -163,6 +165,19 @@ Each monitor receives a short ID. Combined stdout/stderr is written to a private
 | `stop` | Terminate a running monitor and its process group |
 
 Active monitors stop on session shutdown or branch changes. No model call, polling loop, scheduler, or dashboard is involved.
+
+## Ask the user
+
+The `ask_user_question` tool pauses work for exactly one user decision. Omit `options` for free text, provide `options` for single select, or add `multiSelect: true` for multi-select. Choice prompts always include **Other** for a custom response. In print/JSON mode it returns a definitive unavailable result instead of hanging; RPC supports free-text prompts, while choice UIs require the interactive TUI. Questions, context, options, and returned text are bounded before entering model context.
+
+```text
+ask_user_question(
+  question="Which release target should I use?",
+  options=[{ label="Staging (Recommended)" }, { label="Production" }]
+)
+```
+
+Concurrent popup calls share one UI lock and are shown serially.
 
 ## Temporary sudo
 

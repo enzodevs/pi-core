@@ -1,7 +1,7 @@
 {
 	"name": "@rrghost/pi-core",
 	"version": "0.1.0",
-	"description": "Lean skill visibility, session utilities, and OpenAI Fast mode for the Pi coding agent",
+	"description": "Lean interactive tools, skill visibility, session utilities, and Fast mode for the Pi coding agent",
 	"license": "MIT",
 	"author": "Enzo Cambraia",
 	"homepage": "https://github.com/enzodevs/pi-core#readme",
@@ -42,7 +42,8 @@
 			"./extensions/image-clipboard/index.ts",
 			"./extensions/monitor/index.ts",
 			"./extensions/memory/index.ts",
-			"./extensions/sudo/index.ts"
+			"./extensions/sudo/index.ts",
+			"./extensions/ask-user-question/index.ts"
 		]
 	},
 	"scripts": {
