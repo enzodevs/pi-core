@@ -76,9 +76,8 @@ function writeRpc(child: ChildProcessWithoutNullStreams, command: Record<string,
 	child.stdin.write(`${JSON.stringify(command)}\n`);
 }
 
-export function buildChildTools(agent: AgentConfig, lineage: ChildLineage): string[] | undefined {
-	if (!agent.tools?.length) return undefined;
-	const tools = new Set(agent.tools);
+export function buildChildTools(agent: AgentConfig, lineage: ChildLineage): string[] {
+	const tools = new Set(agent.tools ?? []);
 	tools.add("ask_parent");
 	if (lineage.allowedChildren.length > 0 && lineage.depth < lineage.limits.maxDepth) {
 		tools.add("background_agent");
@@ -101,7 +100,7 @@ export function buildChildArgs(
 	const thinking = options.thinking ?? (!options.agent.model ? options.ctx.thinkingLevel : undefined);
 	if (thinking) args.push("--thinking", thinking);
 	const tools = buildChildTools(options.agent, options.lineage);
-	if (tools) args.push("--tools", tools.join(","));
+	args.push("--tools", tools.join(","));
 	args.push("--append-system-prompt", systemPromptFile);
 	return args;
 }

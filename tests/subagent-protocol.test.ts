@@ -144,6 +144,20 @@ describe("subagent lineage and delegation", () => {
 		]);
 	});
 
+	it("keeps empty or invalid-only profiles restricted to the child control tool", () => {
+		const ctx = { model: null, thinkingLevel: "low" } as unknown as ExtensionContext;
+		const restricted = agent({ tools: undefined, children: [] });
+		const args = buildChildArgs(
+			{ agent: restricted, ctx, lineage: { ...first, allowedChildren: [] } },
+			"/tmp/system.md",
+		);
+		const toolsIndex = args.indexOf("--tools");
+
+		expect(buildChildTools(restricted, { ...first, allowedChildren: [] })).toEqual(["ask_parent"]);
+		expect(toolsIndex).toBeGreaterThan(-1);
+		expect(args[toolsIndex + 1]).toBe("ask_parent");
+	});
+
 	it.each([
 		"/repo/.pi/extensions/pi-core/extensions/subagent/index.ts",
 		"/tmp/pi-package-install-123/extensions/subagent/index.ts",
