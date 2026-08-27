@@ -107,6 +107,22 @@ describe("context guard strategic compression", () => {
 		expect(old.content[0].text).toContain("old noise");
 	});
 
+	it("advertises indexed full output inside the same strict projection budget", () => {
+		const result = toolResult("bash", "noise\n".repeat(1000));
+		const artifacts = new Map([[result.toolCallId, "0123456789abcdef"]]);
+		const config = { ...tightConfig, totalToolBytes: 500, bashBytes: 500 };
+		const projection = projectToolContext(
+			[{ role: "user", content: "find the exact failure" }, result],
+			config,
+			artifacts,
+		);
+		const projected = projection.messages[1] as typeof result;
+
+		expect(projected.content.at(-1)?.text).toContain("0123456789abcdef");
+		expect(projected.content.at(-1)?.text).toContain("context_lookup");
+		expect(projection.stats.projectedBytes).toBeLessThanOrEqual(config.totalToolBytes);
+	});
+
 	it("strictly enforces the aggregate budget after many success and error results", () => {
 		const config = { ...tightConfig, totalToolBytes: 100, historicalBytes: 80 };
 		const messages = [

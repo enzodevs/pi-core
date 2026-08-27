@@ -143,6 +143,12 @@ describe("subagent lineage and delegation", () => {
 			"read",
 			"ask_parent",
 		]);
+		expect(
+			buildChildTools(agent({ tools: ["read", "context_lookup"], children: [] }), {
+				...first,
+				allowedChildren: [],
+			}),
+		).toEqual(["read", "context_lookup", "ask_parent"]);
 	});
 
 	it("keeps empty or invalid-only profiles restricted to the child control tool", () => {

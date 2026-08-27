@@ -251,6 +251,7 @@ function toolBudget(toolName: string, isError: boolean, config: ContextGuardConf
 export function projectToolContext<T>(
 	messages: readonly T[],
 	config: ContextGuardConfig = DEFAULT_CONTEXT_GUARD_CONFIG,
+	artifacts: ReadonlyMap<string, string> = new Map(),
 ): ContextProjection<T> {
 	const queryTerms = extractQueryTerms(messages);
 	const toolIndexes: number[] = [];
@@ -276,7 +277,13 @@ export function projectToolContext<T>(
 			rank < config.recentResults
 				? toolBudget(message.toolName ?? "tool", Boolean(message.isError), config)
 				: config.historicalBytes;
-		const budget = Math.min(desired, remaining);
+		const artifactId = message.toolCallId ? artifacts.get(message.toolCallId) : undefined;
+		const artifactReceipt = artifactId
+			? `[full output indexed as ${artifactId}; use context_lookup with a focused query]`
+			: undefined;
+		const receiptBytes = artifactReceipt ? Buffer.byteLength(artifactReceipt) : 0;
+		const includeReceipt = receiptBytes <= remaining;
+		const budget = Math.min(desired, Math.max(0, remaining - (includeReceipt ? receiptBytes : 0)));
 		let blockBudgetRemaining = budget;
 		let sourceBytesRemaining = bytes;
 		let changed = false;
@@ -302,6 +309,12 @@ export function projectToolContext<T>(
 			return compressed === block.text ? block : { ...block, text: compressed };
 		});
 		remaining = Math.max(0, remaining - (budget - blockBudgetRemaining));
+		if (includeReceipt && artifactReceipt) {
+			projectedContent.push({ type: "text", text: artifactReceipt });
+			projectedBytes += receiptBytes;
+			remaining -= receiptBytes;
+			changed = true;
+		}
 		if (changed) {
 			compressedResults++;
 			replacements.set(index, { ...message, content: projectedContent } as unknown as T);

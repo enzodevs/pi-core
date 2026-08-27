@@ -1,7 +1,7 @@
 ---
 name: worker
 description: General-purpose subagent with full built-in coding capabilities, isolated context
-tools: read, write, edit, bash, grep, find, ls
+tools: read, write, edit, bash, grep, find, ls, context_lookup
 children: worker, reviewer
 ---
 
