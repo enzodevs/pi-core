@@ -45,7 +45,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Exact-CWD skill profiles** — sessions in the same directory share one visibility policy.
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
 - **Read-only session analytics** — inspect cost, transcripts, errors, and prompt patterns without an always-active tool.
-- **Portable background subagents** — run isolated Pi agents over RPC, including bounded direct-parent questions and controlled nesting, without requiring tmux.
+- **Observable background subagents** — run real interactive Pi TUI children in tmux, with bounded sidecar delivery and an RPC fallback outside tmux.
 - **Model-free background monitoring** — watch CI, deployments, or long commands and receive one durable completion without polling.
 - **Interactive questions** — ask for bounded free text, one choice, or multiple choices without guessing.
 - **Temporary sudo** — approve each privileged command and enter a masked password that exists only in session memory.
@@ -136,15 +136,19 @@ The skill adds no always-active model-facing tool. Ask Pi questions such as “w
 
 ## Background subagents
 
-`background_agent` starts an isolated Pi process in RPC mode and returns a short run ID immediately. The parent remains free to work; one bounded final handoff is pushed back durably when the child settles. `agent_control` lists compact status, steers a running direct child, replies to a pending question, or stops it. RPC supervision is authoritative and works in interactive Pi or a long-lived headless RPC parent without tmux.
+`background_agent` returns a short run ID immediately, leaving the parent free to continue. When the parent is inside a valid tmux pane, Pi Core opens a detached split containing the **actual interactive Pi TUI child**. Focus it with normal tmux navigation to observe, scroll, or interact with the child directly. Nested agents use the same backend selection, so an allowed child delegation opens another real pane. Outside tmux, or when pane launch fails before work starts, Pi Core preserves the isolated RPC backend.
 
-A child receives the child-only `ask_parent` tool. It can send one concise blocking question, end its turn, and remain alive. Its direct parent receives a bounded notification and replies with:
+Every child gets a persistent Pi session named `agent:<profile>:<run-id>`. Its session header links to the direct parent session, and a non-context custom entry records validated lineage. The child starts with extension discovery disabled, the Pi Core subagent extension loaded by absolute path, skills and prompt templates disabled, and an explicit tool allowlist. Profile tools remain restrictive; Pi Core adds only `ask_parent` and, when the pinned child policy permits nesting, `background_agent` plus `agent_control`.
+
+Parent/child control never uses pane keystrokes or captured terminal output. A private `0700` sidecar beneath `~/.pi/agent/pi-core/subagents/runs/` carries atomic, ownership-checked question, reply, steering, cancellation, exit, and final-result records. This means human typing, focus changes, scrolling, and TUI rendering cannot corrupt automatic delivery. Thinking, tool transcripts, and pane contents never enter the parent; only one immutable UTF-8-bounded final assistant handoff is pushed durably.
+
+A child receives the child-only `ask_parent` tool. It can send one concise blocking question, end its turn, and remain alive. While waiting, ordinary input in the child pane is held so the direct parent remains the answer authority. Reply from the parent with:
 
 ```text
 agent_control(action="reply", id="<run-id>", message="<answer>")
 ```
 
-Agent definitions can opt into nested delegation with `children` frontmatter. The bundled `worker` may delegate to `reviewer`; `reviewer` cannot delegate. Each spawn must name a discoverable profile and, below the top level, appear in the caller's pinned child allowlist. Lineage and direct ownership are validated at every depth, explicit tool lists remain restrictive while adding only required control tools, and a parent cannot control grandchildren.
+`agent_control` also lists compact status, steers a running direct child through the sidecar, or cancels it. A parent cannot control grandchildren. Agent definitions opt into nested delegation with `children` frontmatter; the bundled `worker` may delegate to `reviewer`, while `reviewer` cannot delegate.
 
 ```markdown
 ---
@@ -155,9 +159,9 @@ children: worker, reviewer
 ---
 ```
 
-Limits default to depth 3, four children per parent run, four globally concurrent children, 8 KiB tasks, 12 KiB handoffs, 1 KiB questions, and 2 KiB replies. They can be configured before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_MAX_CHILDREN`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
+Limits default to depth 3, four children per parent run, four globally concurrent children, 8 KiB tasks, 12 KiB handoffs, 1 KiB questions, and 2 KiB replies. Configure them before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_MAX_CHILDREN`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
 
-When Pi is already inside tmux and the `tmux` binary is available, each active child gets a best-effort observation pane showing concise lifecycle status. The pane is not an input or control channel; closing it has no effect on the child, tmux failures are ignored, and all behavior continues through RPC. Child sessions are intentionally ephemeral: active children are cancelled on parent shutdown or branch changes, and reload restores terminal records while marking interrupted work failed rather than silently resuming with stale permissions.
+A settled TUI child seals its final handoff, shows a short completion notice, and exits automatically after a brief grace period. Closing a pane early fails that run; stopping it requests an abort and then force-closes an unresponsive pane. Parent branch changes and normal shutdown cancel owned children. `/reload` is different: live tmux children are detached from the retiring extension instance and reattached by the new one using their durable lineage, pane, session, and sidecar metadata. RPC children cannot be reattached and are terminalized safely on reload.
 
 ## Background monitors
 
@@ -269,10 +273,13 @@ State persists at:
 ```mermaid
 flowchart LR
     Pi[Parent Pi session] --> Skills[Skill visibility]
-    Pi --> Agents[RPC subagent supervisor]
-    Agents --> Child[Isolated child Pi]
-    Child --> Nested[Allowed named child]
-    Agents -. optional status .-> Tmux[tmux observation pane]
+    Pi --> Agents[Shared subagent coordinator]
+    Agents --> Tmux[Interactive tmux TUI runner]
+    Agents --> RPC[RPC fallback runner]
+    Tmux --> Child[Persistent child Pi session]
+    RPC --> Child
+    Child --> Nested[Allowed named child pane]
+    Child <--> Sidecar[Bounded atomic sidecar]
     Pi --> Footer[Minimal reactive footer]
     Pi --> Fast[Fast-mode request hook]
     Pi --> Analytics[On-demand session analytics]

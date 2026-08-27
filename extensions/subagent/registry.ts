@@ -58,10 +58,23 @@ export class GlobalConcurrencyRegistry {
 	}
 
 	async claim(id: string): Promise<ConcurrencyLease> {
+		return this.claimInternal(id, false);
+	}
+
+	/** Reclaim a live tmux child after extension reload or parent-process restart. */
+	async adopt(id: string): Promise<ConcurrencyLease> {
+		return this.claimInternal(id, true);
+	}
+
+	private async claimInternal(id: string, adoptOwned: boolean): Promise<ConcurrencyLease> {
 		await this.withLock(async () => {
 			const state = await this.readState();
 			state.leases = state.leases.filter((lease) => this.isPidAlive(lease.pid));
-			if (state.leases.some((lease) => lease.id === id)) throw new Error(`Duplicate agent run: ${id}.`);
+			const existing = state.leases.find((lease) => lease.id === id);
+			if (existing) {
+				if (!adoptOwned || existing.pid !== this.pid) throw new Error(`Duplicate agent run: ${id}.`);
+				return;
+			}
 			if (state.leases.length >= this.limit) {
 				throw new Error(`Global background-agent concurrency limit reached (${this.limit}).`);
 			}

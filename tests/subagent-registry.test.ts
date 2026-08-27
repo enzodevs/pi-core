@@ -33,6 +33,16 @@ describe("global subagent concurrency registry", () => {
 		await Promise.all([second.release(), third.release()]);
 	});
 
+	it("adopts the same live lease across extension reload without consuming another slot", async () => {
+		const store = registry(1, 777);
+		await store.claim("pane-child");
+		const adopted = await store.adopt("pane-child");
+		await expect(store.claim("other")).rejects.toThrow("concurrency limit");
+		await adopted.release();
+		const replacement = await store.claim("replacement");
+		await replacement.release();
+	});
+
 	it("prunes a lease whose owner process is gone", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-core-registry-test-"));
 		roots.push(root);

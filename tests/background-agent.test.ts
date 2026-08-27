@@ -99,6 +99,19 @@ describe("background agent handoff truncation", () => {
 		});
 	});
 
+	it("round-trips a live tmux runtime for reload reattachment", () => {
+		const runtime = {
+			backend: "tmux-tui" as const,
+			sessionFile: "/tmp/child.jsonl",
+			paneId: "%9",
+			channelDirectory: "/tmp/channel",
+			channelToken: "token",
+		};
+		const snapshot = snapshotRun(managedRun({ runtime }));
+
+		expect(normalizePersistedRun(snapshot)).toMatchObject({ runtime });
+	});
+
 	it("persists delivered transitions without duplicating payloads", () => {
 		const snapshot = snapshotRun(
 			managedRun({

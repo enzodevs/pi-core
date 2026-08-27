@@ -172,6 +172,9 @@ describe("subagent lineage and delegation", () => {
 
 		expect(args.slice(0, 3)).toEqual(["--mode", "rpc", "--no-session"]);
 		expect(args[extensionIndex + 1]).toBe(path.resolve(extensionPath));
+		expect(args).toContain("--no-extensions");
+		expect(args).toContain("--no-skills");
+		expect(args).toContain("--no-prompt-templates");
 		expect(args[toolsIndex + 1]?.split(",")).toEqual([
 			"read",
 			"ask_parent",

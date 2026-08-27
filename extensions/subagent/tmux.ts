@@ -1,111 +1,117 @@
 import { execFileSync } from "node:child_process";
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
-export interface TmuxObserver {
-	status(text: string): void;
-	close(): void;
-}
-
 export type CommandRunner = (command: string, args: string[]) => string;
-
-const nullObserver: TmuxObserver = {
-	status() {},
-	close() {},
-};
 
 function defaultRun(command: string, args: string[]): string {
 	return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 }
 
-export function isTmuxObservationAvailable(
+export interface TmuxPaneLaunch {
+	parentPane: string;
+	cwd: string;
+	title: string;
+	channelDirectory: string;
+	channelToken: string;
+	environment: Record<string, string>;
+	command: string;
+	args: string[];
+}
+
+export class TmuxLaunchError extends Error {
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, options);
+		this.name = "TmuxLaunchError";
+	}
+}
+
+export function isTmuxTuiAvailable(
 	env: NodeJS.ProcessEnv = process.env,
 	run: CommandRunner = defaultRun,
 ): boolean {
-	if (!env.TMUX || !env.TMUX_PANE) return false;
+	if (!env.TMUX || !env.TMUX_PANE || !/^%\d+$/.test(env.TMUX_PANE)) return false;
 	try {
-		run("tmux", ["-V"]);
+		run("tmux", ["display-message", "-p", "-t", env.TMUX_PANE, "#{pane_id}"]);
 		return true;
 	} catch {
 		return false;
 	}
 }
 
-export function createTmuxObserver(params: {
-	id: string;
-	agent: string;
-	env?: NodeJS.ProcessEnv;
-	run?: CommandRunner;
-	tempRoot?: string;
-}): TmuxObserver {
-	const env = params.env ?? process.env;
-	const run = params.run ?? defaultRun;
-	if (!isTmuxObservationAvailable(env, run)) return nullObserver;
+export function buildTmuxLaunchArgs(
+	params: TmuxPaneLaunch,
+	hostScript = path.join(import.meta.dirname, "pane-host.sh"),
+): string[] {
+	const environment = Object.entries(params.environment).flatMap(([name, value]) => [
+		"-e",
+		`${name}=${value}`,
+	]);
+	return [
+		"split-window",
+		"-d",
+		"-h",
+		"-t",
+		params.parentPane,
+		"-c",
+		params.cwd,
+		"-P",
+		"-F",
+		"#{pane_id}",
+		...environment,
+		"sh",
+		hostScript,
+		params.channelDirectory,
+		params.channelToken,
+		params.command,
+		...params.args,
+	];
+}
 
-	let directory: string | undefined;
-	let pane: string | undefined;
-	try {
-		directory = fs.mkdtempSync(path.join(params.tempRoot ?? os.tmpdir(), "pi-core-agent-view-"));
-		const logFile = path.join(directory, "status.log");
-		fs.writeFileSync(logFile, `${params.id} ${params.agent} starting\n`, { encoding: "utf8", mode: 0o600 });
-		pane = run("tmux", [
-			"split-window",
-			"-d",
-			"-h",
-			"-t",
-			env.TMUX_PANE as string,
-			"-P",
-			"-F",
-			"#{pane_id}",
-			"tail",
-			"-n",
-			"+1",
-			"-f",
-			"--",
-			logFile,
-		]).trim();
-		if (!pane.startsWith("%")) throw new Error("tmux did not return a pane id");
-		run("tmux", ["select-pane", "-t", pane, "-T", `agent:${params.agent}:${params.id}`]);
+export class TmuxClient {
+	constructor(
+		private readonly env: NodeJS.ProcessEnv = process.env,
+		private readonly run: CommandRunner = defaultRun,
+	) {}
 
-		let closed = false;
-		return {
-			status(text: string) {
-				if (closed) return;
-				const line = text
-					.replace(/[\r\n]+/g, " ")
-					.trim()
-					.slice(0, 240);
-				try {
-					fs.appendFileSync(logFile, `${line}\n`, "utf8");
-				} catch {
-					// Observation is best effort and never affects RPC supervision.
-				}
-			},
-			close() {
-				if (closed) return;
-				closed = true;
-				try {
-					run("tmux", ["kill-pane", "-t", pane as string]);
-				} catch {
-					// The user may already have closed the pane.
-				}
-				try {
-					fs.rmSync(directory as string, { recursive: true, force: true });
-				} catch {
-					// Temporary status cleanup is best effort.
-				}
-			},
-		};
-	} catch {
-		if (pane) {
-			try {
-				run("tmux", ["kill-pane", "-t", pane]);
-			} catch {
-				// Ignore optional display failures.
-			}
-		}
-		if (directory) fs.rmSync(directory, { recursive: true, force: true });
-		return nullObserver;
+	available(): boolean {
+		return isTmuxTuiAvailable(this.env, this.run);
 	}
+
+	launch(params: Omit<TmuxPaneLaunch, "parentPane">): string {
+		const parentPane = this.env.TMUX_PANE;
+		if (!parentPane || !this.available()) throw new TmuxLaunchError("tmux parent pane is unavailable.");
+		let pane: string | undefined;
+		try {
+			pane = this.run("tmux", buildTmuxLaunchArgs({ ...params, parentPane })).trim();
+			if (!/^%\d+$/.test(pane)) throw new Error("tmux did not return a pane id");
+			this.run("tmux", ["select-pane", "-t", pane, "-T", params.title]);
+			return pane;
+		} catch (error) {
+			if (pane && /^%\d+$/.test(pane)) this.kill(pane);
+			throw new TmuxLaunchError("Could not launch an interactive tmux child pane.", { cause: error });
+		}
+	}
+
+	alive(pane: string): boolean {
+		try {
+			return this.run("tmux", ["display-message", "-p", "-t", pane, "#{pane_dead}"]).trim() === "0";
+		} catch {
+			return false;
+		}
+	}
+
+	kill(pane: string): void {
+		try {
+			this.run("tmux", ["kill-pane", "-t", pane]);
+		} catch {
+			// The user may already have closed the pane.
+		}
+	}
+}
+
+export function createTmuxClient(
+	env: NodeJS.ProcessEnv = process.env,
+	run: CommandRunner = defaultRun,
+): TmuxClient {
+	return new TmuxClient(env, run);
 }

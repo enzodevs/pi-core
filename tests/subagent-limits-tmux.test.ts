@@ -5,7 +5,12 @@ import {
 	DEFAULT_SUBAGENT_LIMITS,
 	resolveSubagentLimits,
 } from "../extensions/subagent/limits.js";
-import { createTmuxObserver, isTmuxObservationAvailable } from "../extensions/subagent/tmux.js";
+import {
+	buildTmuxLaunchArgs,
+	isTmuxTuiAvailable,
+	TmuxClient,
+	TmuxLaunchError,
+} from "../extensions/subagent/tmux.js";
 
 describe("subagent bounds and agent definitions", () => {
 	it("loads bounded environment overrides and rejects unsafe values", () => {
@@ -32,30 +37,72 @@ describe("subagent bounds and agent definitions", () => {
 	});
 });
 
-describe("optional tmux observability", () => {
-	it("does not invoke tmux or affect behavior when tmux is absent", () => {
+describe("interactive tmux backend probing and launch", () => {
+	it("selects no tmux backend without a real parent pane", () => {
 		let calls = 0;
-		const run = () => {
-			calls++;
-			throw new Error("tmux should not run");
-		};
-		expect(isTmuxObservationAvailable({}, run)).toBe(false);
-		const observer = createTmuxObserver({ id: "aaaaaaaa", agent: "worker", env: {}, run });
-		observer.status("running");
-		observer.close();
+		expect(
+			isTmuxTuiAvailable({}, () => {
+				calls++;
+				return "";
+			}),
+		).toBe(false);
 		expect(calls).toBe(0);
+		expect(isTmuxTuiAvailable({ TMUX: "/tmp/tmux", TMUX_PANE: "not-a-pane" }, () => "%1")).toBe(false);
 	});
 
-	it("degrades to a no-op if tmux probing fails inside tmux", () => {
-		const observer = createTmuxObserver({
-			id: "aaaaaaaa",
-			agent: "worker",
-			env: { TMUX: "/tmp/tmux", TMUX_PANE: "%1" },
-			run: () => {
-				throw new Error("missing binary");
+	it("launches a detached split whose command is the actual child Pi invocation", () => {
+		const args = buildTmuxLaunchArgs(
+			{
+				parentPane: "%5",
+				cwd: "/repo",
+				title: "agent:worker:abcd1234",
+				channelDirectory: "/private/channel",
+				channelToken: "token",
+				environment: { PI_CORE_SUBAGENT_CONTEXT: "lineage" },
+				command: "/usr/bin/pi",
+				args: ["--session", "/sessions/child.jsonl", "@/private/channel/task.md"],
 			},
+			"/package/pane-host.sh",
+		);
+		expect(args.slice(0, 11)).toEqual([
+			"split-window",
+			"-d",
+			"-h",
+			"-t",
+			"%5",
+			"-c",
+			"/repo",
+			"-P",
+			"-F",
+			"#{pane_id}",
+			"-e",
+		]);
+		expect(args).toContain("PI_CORE_SUBAGENT_CONTEXT=lineage");
+		expect(args.slice(-4)).toEqual([
+			"/usr/bin/pi",
+			"--session",
+			"/sessions/child.jsonl",
+			"@/private/channel/task.md",
+		]);
+		expect(args.join(" ")).not.toContain("tail -n");
+	});
+
+	it("fails launch atomically when tmux does not return a pane", () => {
+		const client = new TmuxClient({ TMUX: "/tmp/tmux", TMUX_PANE: "%5" }, (_command, args) => {
+			if (args[0] === "display-message") return "%5\n";
+			if (args[0] === "split-window") return "not-a-pane\n";
+			return "";
 		});
-		expect(() => observer.status("still running")).not.toThrow();
-		expect(() => observer.close()).not.toThrow();
+		expect(() =>
+			client.launch({
+				cwd: "/repo",
+				title: "agent",
+				channelDirectory: "/private/channel",
+				channelToken: "token",
+				environment: {},
+				command: "pi",
+				args: [],
+			}),
+		).toThrow(TmuxLaunchError);
 	});
 });

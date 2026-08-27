@@ -10,6 +10,7 @@ import { assertBoundedText, resolveSubagentLimits, truncateUtf8 as truncateToLim
 import {
 	ASK_PARENT_PROTOCOL,
 	CHILD_START_PROTOCOL,
+	type ChildLineage,
 	COMPLETION_MESSAGE_TYPE,
 	COMPLETION_PROTOCOL,
 	createChildLineage,
@@ -18,8 +19,16 @@ import {
 	ownsDirectChild,
 	type PendingQuestion,
 } from "./protocol.ts";
-import { GlobalConcurrencyRegistry } from "./registry.ts";
-import { type ChildHandle, runRpcAgent } from "./runner.ts";
+import { type ConcurrencyLease, GlobalConcurrencyRegistry } from "./registry.ts";
+import {
+	attachAgent,
+	type ChildHandle,
+	type ChildRuntime,
+	type RunAgentOptions,
+	RunnerDetachedError,
+	runAgent,
+} from "./runner.ts";
+import { createTmuxChildBridge } from "./tui-bridge.ts";
 
 const MAX_RECENT_RUNS = 20;
 const ENTRY_TYPE = "pi-core-agent-run";
@@ -78,6 +87,7 @@ export interface ManagedRun {
 	rootRunId: string;
 	depth: number;
 	ancestry: string[];
+	runtime?: ChildRuntime;
 	child?: ChildHandle;
 	cancelRequested?: boolean;
 	deliveryQueued?: boolean;
@@ -147,6 +157,7 @@ export function snapshotRun(run: ManagedRun, transition = false): PersistedRun {
 		rootRunId: run.rootRunId,
 		depth: run.depth,
 		ancestry: [...run.ancestry],
+		runtime: run.runtime,
 	};
 }
 
@@ -158,7 +169,24 @@ function completionText(run: ManagedRun): string {
 function compactStatus(run: ManagedRun): string {
 	const seconds = Math.max(0, Math.round(((run.finishedAt ?? Date.now()) - run.startedAt) / 1_000));
 	const state = run.status === "running" ? run.activity : run.status;
-	return `${run.id} ${run.agent} ${state} d${run.depth} ${seconds}s`;
+	const backend = run.runtime?.backend === "tmux-tui" ? " pane" : "";
+	return `${run.id} ${run.agent} ${state}${backend} d${run.depth} ${seconds}s`;
+}
+
+function childSettlement(ctx: ExtensionContext): { status: "complete" | "failed"; output: string } {
+	const message = currentAssistantMessage(ctx);
+	if (!message) return { status: "failed", output: "No final assistant output returned." };
+	const text = message.content
+		.flatMap((part) => (part.type === "text" ? [part.text] : []))
+		.join("\n\n")
+		.trim();
+	if (message.stopReason === "error" || message.stopReason === "aborted") {
+		return {
+			status: "failed",
+			output: message.errorMessage || text || `Child model ${message.stopReason}.`,
+		};
+	}
+	return { status: "complete", output: text || "No final assistant output returned." };
 }
 
 export function normalizePersistedRun(value: PersistedRun): PersistedRun | null {
@@ -199,12 +227,30 @@ export function normalizePersistedRun(value: PersistedRun): PersistedRun | null 
 	) {
 		return null;
 	}
+	if (value.runtime !== undefined) {
+		const runtime = value.runtime as ChildRuntime;
+		if (
+			!runtime ||
+			(runtime.backend !== "rpc" && runtime.backend !== "tmux-tui") ||
+			typeof runtime.sessionFile !== "string" ||
+			!path.isAbsolute(runtime.sessionFile) ||
+			(runtime.backend === "tmux-tui" &&
+				(typeof runtime.paneId !== "string" ||
+					!/^%\d+$/.test(runtime.paneId) ||
+					typeof runtime.channelDirectory !== "string" ||
+					!path.isAbsolute(runtime.channelDirectory) ||
+					typeof runtime.channelToken !== "string"))
+		) {
+			return null;
+		}
+	}
 	return value;
 }
 
 export default function backgroundAgents(pi: ExtensionAPI): void {
 	if (invalidLineage) return;
 
+	const tuiBridge = childLineage ? createTmuxChildBridge(pi, childLineage, limits) : undefined;
 	const runs = new Map<string, ManagedRun>();
 	const startedIds = new Set<string>();
 	const concurrency = new GlobalConcurrencyRegistry({
@@ -310,7 +356,91 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		deliverCompletion(run);
 		prune();
 	};
-	const restoreActiveBranch = (ctx: ExtensionContext, interruptedReason: string) => {
+	const lineageForRun = (run: ManagedRun): ChildLineage => ({
+		version: 1,
+		runId: run.id,
+		rootRunId: run.rootRunId,
+		parentRunId: run.parentRunId,
+		agent: run.agent,
+		depth: run.depth,
+		ancestry: [...run.ancestry],
+		allowedChildren: [],
+		limits: { ...limits },
+		registryPath,
+	});
+	const supervise = (
+		run: ManagedRun,
+		agent: AgentConfig,
+		ctx: ExtensionContext,
+		lineage: ChildLineage,
+		lease: ConcurrencyLease,
+		start: (options: RunAgentOptions) => Promise<string>,
+		dispatch: { model?: string; thinking?: string } = {},
+	) => {
+		const generation = run.generation;
+		let preserveLease = false;
+		const options: RunAgentOptions = {
+			agent,
+			task: run.task,
+			cwd: run.cwd,
+			ctx,
+			lineage,
+			limits,
+			...dispatch,
+			onSpawn(child) {
+				if (!ownsRun(runs, run, generation) || run.cancelRequested) {
+					child.abort();
+					return;
+				}
+				run.child = child;
+				run.runtime = child.runtime;
+				run.activity = "running";
+				persist(run);
+				updateStatus();
+			},
+			onQuestion(question) {
+				if (!ownsRun(runs, run, generation)) return;
+				const delivered = run.question?.id === question.id && run.question.delivered;
+				run.question = { ...question, delivered: Boolean(delivered) };
+				run.activity = "waiting";
+				persist(run);
+				updateStatus();
+				deliverQuestion(run);
+			},
+			onStatus(status) {
+				if (!ownsRun(runs, run, generation)) return;
+				run.activity = status.startsWith("waiting") ? "waiting" : "running";
+				updateStatus();
+			},
+		};
+		void (async () => {
+			try {
+				const output = await start(options);
+				if (ownsRun(runs, run, generation)) finish(run, "complete", output);
+			} catch (error) {
+				if (error instanceof RunnerDetachedError) {
+					preserveLease = true;
+					return;
+				}
+				if (!ownsRun(runs, run, generation)) return;
+				const message = error instanceof Error ? error.message : String(error);
+				finish(run, message === "stopped" ? "stopped" : "failed", message);
+			} finally {
+				if (!preserveLease) {
+					try {
+						await lease.release();
+					} catch {
+						currentCtx?.ui.notify(`Could not release agent ${run.id} concurrency lease.`, "warning");
+					}
+				}
+			}
+		})();
+	};
+	const restoreActiveBranch = async (
+		ctx: ExtensionContext,
+		interruptedReason: string,
+		treatTmuxAsAttachable: boolean,
+	) => {
 		branchGeneration++;
 		for (const run of runs.values()) {
 			run.cancelRequested = true;
@@ -333,10 +463,31 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			runs.set(patch.id, { ...normalized, generation: branchGeneration } as ManagedRun);
 			startedIds.add(patch.id);
 		}
+		const agents = discoverAgents(ctx.cwd, "user").agents;
 		for (const run of runs.values()) {
+			if (run.status === "running" && treatTmuxAsAttachable && run.runtime?.backend === "tmux-tui") {
+				try {
+					const lease = await concurrency.adopt(run.id);
+					const agent =
+						agents.find((candidate) => candidate.name === run.agent) ??
+						({
+							name: run.agent,
+							description: "restored interactive child",
+							systemPrompt: "",
+							source: "bundled",
+							filePath: "<restored>",
+						} satisfies AgentConfig);
+					supervise(run, agent, ctx, lineageForRun(run), lease, (options) =>
+						attachAgent(options, run.runtime as ChildRuntime),
+					);
+					continue;
+				} catch (error) {
+					run.error = error instanceof Error ? error.message : String(error);
+				}
+			}
 			if (run.status === "running") {
 				run.status = "failed";
-				run.error = interruptedReason;
+				run.error = run.error || interruptedReason;
 				run.question = undefined;
 				run.finishedAt = Date.now();
 				run.delivery = "pending";
@@ -348,15 +499,16 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		updateStatus();
 	};
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		currentCtx = ctx;
-		restoreActiveBranch(ctx, "Parent session restarted before completion.");
+		tuiBridge?.start(ctx);
+		await restoreActiveBranch(ctx, "Parent session restarted before completion.", true);
 	});
-	pi.on("session_tree", (_event, ctx) => {
+	pi.on("session_tree", async (_event, ctx) => {
 		currentCtx = ctx;
-		restoreActiveBranch(ctx, "Parent changed session branch before completion.");
+		await restoreActiveBranch(ctx, "Parent changed session branch before completion.", false);
 	});
-	pi.on("agent_settled", () => {
+	pi.on("agent_settled", (_event, ctx) => {
 		for (const run of runs.values()) {
 			if (run.question && !run.question.delivered) deliverQuestion(run);
 			if (run.delivery !== "pending") continue;
@@ -364,19 +516,29 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			run.deliveryQueued = false;
 			deliverCompletion(run);
 		}
-	});
-	pi.on("session_shutdown", () => {
-		for (const run of runs.values()) {
-			run.cancelRequested = true;
-			run.child?.abort();
+		if (tuiBridge) {
+			const hasActiveChildren = [...runs.values()].some((run) => run.status === "running");
+			tuiBridge.settle(childSettlement(ctx), hasActiveChildren);
 		}
+	});
+	pi.on("session_shutdown", (event) => {
+		branchGeneration++;
+		for (const run of runs.values()) {
+			if (event.reason === "reload" && run.runtime?.backend === "tmux-tui") run.child?.detach();
+			else {
+				run.cancelRequested = true;
+				run.child?.abort();
+			}
+		}
+		tuiBridge?.shutdown(event.reason);
 		currentCtx = undefined;
 	});
 
 	if (childLineage) {
 		const askParentGate = new AskParentTurnGate();
 		pi.on("tool_call", (event, ctx) => askParentGate.intercept(event, currentAssistantMessage(ctx)));
-		pi.on("input", () => {
+		pi.on("input", (_event, ctx) => {
+			if (tuiBridge?.blockHumanInputWhileWaiting(ctx)) return { action: "handled" as const };
 			questionOpen = false;
 		});
 		pi.registerTool({
@@ -389,10 +551,13 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			parameters: AskParentParams,
 			executionMode: "sequential",
 			async execute(_toolCallId, params, _signal, _update, ctx) {
-				if (questionOpen) throw new Error("A parent question is already pending.");
+				if ((!tuiBridge && questionOpen) || tuiBridge?.isQuestionPending()) {
+					throw new Error("A parent question is already pending.");
+				}
 				const question = assertBoundedText(params.question, "question", limits.questionBytes);
-				questionOpen = true;
+				questionOpen = !tuiBridge;
 				const id = newRunId();
+				tuiBridge?.publishParentQuestion(id, question);
 				ctx.abort();
 				return {
 					content: [{ type: "text", text: "Question sent. End this turn and wait for the parent reply." }],
@@ -467,53 +632,10 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			persist(run);
 			updateStatus();
 
-			void runRpcAgent({
-				agent,
-				task,
-				cwd,
-				ctx,
-				lineage,
-				limits,
+			supervise(run, agent, ctx, lineage, lease, runAgent, {
 				model,
 				thinking: params.thinking,
-				onSpawn(child) {
-					if (!ownsRun(runs, run, branchGeneration) || run.cancelRequested) {
-						child.abort();
-						return;
-					}
-					run.child = child;
-					run.activity = "running";
-					updateStatus();
-				},
-				onQuestion(question) {
-					if (!ownsRun(runs, run, branchGeneration)) return;
-					run.question = question;
-					run.activity = "waiting";
-					persist(run);
-					updateStatus();
-					deliverQuestion(run);
-				},
-				onStatus(status) {
-					if (!ownsRun(runs, run, branchGeneration)) return;
-					run.activity = status.startsWith("waiting") ? "waiting" : "running";
-					updateStatus();
-				},
-			})
-				.finally(async () => {
-					try {
-						await lease.release();
-					} catch {
-						currentCtx?.ui.notify(`Could not release agent ${id} concurrency lease.`, "warning");
-					}
-				})
-				.then((output) => {
-					if (ownsRun(runs, run, branchGeneration)) finish(run, "complete", output);
-				})
-				.catch((error: unknown) => {
-					if (!ownsRun(runs, run, branchGeneration)) return;
-					const message = error instanceof Error ? error.message : String(error);
-					finish(run, message === "stopped" ? "stopped" : "failed", message);
-				});
+			});
 
 			return {
 				content: [{ type: "text", text: `started ${agent.name} ${id}` }],
