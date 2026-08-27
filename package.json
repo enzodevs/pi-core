@@ -42,6 +42,7 @@
 			"./extensions/image-clipboard/index.ts",
 			"./extensions/monitor/index.ts",
 			"./extensions/memory/index.ts",
+			"./extensions/context-guard/index.ts",
 			"./extensions/sudo/index.ts",
 			"./extensions/ask-user-question/index.ts",
 			"./extensions/subagent/index.ts"

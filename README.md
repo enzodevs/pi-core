@@ -45,6 +45,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Exact-CWD skill profiles** — sessions in the same directory share one visibility policy.
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
 - **Read-only session analytics** — inspect cost, transcripts, errors, and prompt patterns without an always-active tool.
+- **Strategic context guard** — preserve full session/TUI output while projecting bounded, diagnostic-first tool evidence to models.
 - **Observable background subagents** — run real interactive Pi TUI children in tmux, with bounded sidecar delivery and an RPC fallback outside tmux.
 - **Model-free background monitoring** — watch CI, deployments, or long commands and receive one durable completion without polling.
 - **Interactive questions** — ask for bounded free text, one choice, or multiple choices without guessing.
@@ -134,6 +135,12 @@ The bundled `analyze-sessions` skill provides read-only, on-demand scripts over 
 
 The skill adds no always-active model-facing tool. Ask Pi questions such as “what did Pi cost this week?”, “find the session about rate limits”, or “show where recent sessions hit tool errors.”
 
+## Strategic context guard
+
+Pi Core keeps original tool results in the session and TUI, but projects a smaller evidence view immediately before every model call. Recent errors receive the largest budget; command output keeps the start, diagnostics, task-relevant lines, and tail; large reads preserve task-matching evidence; older successful results collapse to tiny receipts. A newest-first 24 KiB rolling budget prevents accumulated tool transcripts from dominating later turns. The same extension is explicitly loaded in interactive and RPC subagents.
+
+Compression is deterministic and model-free. It never changes files, tool execution, human-visible history, images, or assistant/user messages, and it does not require an artifact-query workflow. `/context-guard` reports the latest projection ratio. This selective, relevance-aware policy follows evidence that indiscriminate long context can reduce retrieval performance ([Lost in the Middle](https://aclanthology.org/2024.tacl-1.9/)) and that preserving key information outperforms uniform compression ([Concise and Precise Context Compression for Tool-Using Language Models](https://aclanthology.org/2024.findings-acl.974/)).
+
 ## Background subagents
 
 `background_agent` returns a short run ID immediately, leaving the parent free to continue. When the parent is inside a valid tmux pane, Pi Core opens a detached split containing the **actual interactive Pi TUI child**. Focus it with normal tmux navigation to observe, scroll, or interact with the child directly. Nested agents use the same backend selection, so an allowed child delegation opens another real pane. Outside tmux, or when pane launch fails before work starts, Pi Core preserves the isolated RPC backend.
@@ -148,7 +155,7 @@ A child receives the child-only `ask_parent` tool. It can send one concise block
 agent_control(action="reply", id="<run-id>", message="<answer>")
 ```
 
-`agent_control` also lists compact status, steers a running direct child through the sidecar, or cancels it. A parent cannot control grandchildren. Agent definitions opt into nested delegation with `children` frontmatter; the bundled `worker` may delegate to `reviewer`, while `reviewer` cannot delegate.
+`agent_control` also lists compact status, steers a running direct child through the sidecar, or cancels it. A parent cannot control grandchildren. Agent definitions opt into nested delegation with `children` frontmatter. The bundled `worker` and read-only `reviewer` may delegate to either role; depth and concurrency limits prevent recursive runaway.
 
 ```markdown
 ---
@@ -159,7 +166,7 @@ children: worker, reviewer
 ---
 ```
 
-Limits default to depth 3, four children per parent run, four globally concurrent children, 8 KiB tasks, 12 KiB handoffs, 1 KiB questions, and 2 KiB replies. Configure them before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_MAX_CHILDREN`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
+Limits default to depth 3, eight children per parent run, six globally concurrent children, 8 KiB tasks, 12 KiB handoffs, 1 KiB questions, and 2 KiB replies. Configure them before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_MAX_CHILDREN`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
 
 A settled TUI child seals its final handoff, shows a short completion notice, and exits automatically after a brief grace period. Closing a pane early fails that run; stopping it requests an abort and then force-closes an unresponsive pane. Parent branch changes and normal shutdown cancel owned children. `/reload` is different: live tmux children are detached from the retiring extension instance and reattached by the new one using their durable lineage, pane, session, and sidecar metadata. RPC children cannot be reattached and are terminalized safely on reload.
 
@@ -283,6 +290,9 @@ flowchart LR
     Pi --> Footer[Minimal reactive footer]
     Pi --> Fast[Fast-mode request hook]
     Pi --> Analytics[On-demand session analytics]
+    Pi --> Guard[Strategic context projection]
+    ToolResults[Full session tool results] --> Guard
+    Guard --> Model[Bounded diagnostic-first evidence]
     Skills --> Store[(~/.pi/agent/pi-core)]
     Agents --> Store
     Analytics --> Sessions[(Pi session JSONL)]

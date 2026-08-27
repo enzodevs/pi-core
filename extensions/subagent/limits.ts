@@ -10,8 +10,8 @@ export interface SubagentLimits {
 
 export const DEFAULT_SUBAGENT_LIMITS: Readonly<SubagentLimits> = {
 	maxDepth: 3,
-	maxChildrenPerRun: 4,
-	globalConcurrency: 4,
+	maxChildrenPerRun: 8,
+	globalConcurrency: 6,
 	taskBytes: 8 * 1024,
 	handoffBytes: 12 * 1024,
 	questionBytes: 1024,

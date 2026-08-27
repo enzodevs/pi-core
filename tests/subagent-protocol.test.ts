@@ -19,6 +19,7 @@ import {
 import {
 	buildChildArgs,
 	buildChildTools,
+	CONTEXT_GUARD_EXTENSION_PATH,
 	parentReplyCommand,
 	SUBAGENT_EXTENSION_PATH,
 } from "../extensions/subagent/runner.js";
@@ -172,6 +173,7 @@ describe("subagent lineage and delegation", () => {
 
 		expect(args.slice(0, 3)).toEqual(["--mode", "rpc", "--no-session"]);
 		expect(args[extensionIndex + 1]).toBe(path.resolve(extensionPath));
+		expect(args).toContain(path.resolve(CONTEXT_GUARD_EXTENSION_PATH));
 		expect(args).toContain("--no-extensions");
 		expect(args).toContain("--no-skills");
 		expect(args).toContain("--no-prompt-templates");
@@ -189,6 +191,8 @@ describe("subagent lineage and delegation", () => {
 		expect(path.isAbsolute(SUBAGENT_EXTENSION_PATH)).toBe(true);
 		expect(SUBAGENT_EXTENSION_PATH).toMatch(/extensions[/\\]subagent[/\\]index\.ts$/);
 		expect(fs.existsSync(SUBAGENT_EXTENSION_PATH)).toBe(true);
+		expect(CONTEXT_GUARD_EXTENSION_PATH).toMatch(/extensions[/\\]context-guard[/\\]index\.ts$/);
+		expect(fs.existsSync(CONTEXT_GUARD_EXTENSION_PATH)).toBe(true);
 	});
 });
 

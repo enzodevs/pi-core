@@ -26,6 +26,7 @@ const HANDOFF_INSTRUCTION =
 const SIDECAR_CLEANUP_DELAY_MS = 15_000;
 
 export const SUBAGENT_EXTENSION_PATH = path.join(import.meta.dirname, "index.ts");
+export const CONTEXT_GUARD_EXTENSION_PATH = path.join(import.meta.dirname, "..", "context-guard", "index.ts");
 
 export type ChildRuntime =
 	| { backend: "rpc"; sessionFile: string }
@@ -155,6 +156,8 @@ export function buildChildArgs(
 		"--no-extensions",
 		"--extension",
 		path.resolve(extensionPath),
+		"--extension",
+		path.resolve(CONTEXT_GUARD_EXTENSION_PATH),
 		"--no-skills",
 		"--no-prompt-templates",
 		"--no-approve",

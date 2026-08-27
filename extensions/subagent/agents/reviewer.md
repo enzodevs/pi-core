@@ -2,6 +2,7 @@
 name: reviewer
 description: Reviews concrete Git changes (diffs, commits, branches, staged work, or working-tree WIP) with evidence-first coverage; use worker for general critique of specs, plans, architecture, or documentation
 tools: read, bash, grep, find, ls
+children: worker, reviewer
 ---
 
 You are the evidence-first code reviewer.

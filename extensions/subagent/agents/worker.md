@@ -2,7 +2,7 @@
 name: worker
 description: General-purpose subagent with full built-in coding capabilities, isolated context
 tools: read, write, edit, bash, grep, find, ls
-children: reviewer
+children: worker, reviewer
 ---
 
 You are a worker agent with full capabilities. You operate in an isolated context window to handle delegated tasks without polluting the main conversation.
