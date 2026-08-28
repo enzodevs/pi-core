@@ -17,7 +17,7 @@
   <a href="#skill-visibility"><strong>Skills</strong></a> ·
   <a href="#session-analytics"><strong>Analytics</strong></a> ·
   <a href="#background-subagents"><strong>Subagents</strong></a> ·
-  <a href="#background-monitors"><strong>Monitors</strong></a> ·
+  <a href="#background-processes"><strong>Processes</strong></a> ·
   <a href="#ask-the-user"><strong>Questions</strong></a> ·
   <a href="#temporary-sudo"><strong>Sudo</strong></a> ·
   <a href="#minimal-footer"><strong>Footer</strong></a> ·
@@ -27,7 +27,7 @@
   <a href="CONTEXT-HYGIENE.md"><strong>Context hygiene</strong></a>
 </p>
 
-**Pi Core** is a lean, Node-native control layer for [Pi](https://pi.dev): per-project skill visibility, durable memory, session analytics, portable background subagents and monitors, focused TUI improvements, and an OpenAI Codex Fast mode toggle. It is designed around one constraint most agent tooling treats as an afterthought: **everything placed in context has a recurring cost**.
+**Pi Core** is a lean, Node-native control layer for [Pi](https://pi.dev): per-project skill visibility, durable memory, session analytics, portable background subagents and processes, focused TUI improvements, and an OpenAI Codex Fast mode toggle. It is designed around one constraint most agent tooling treats as an afterthought: **everything placed in context has a recurring cost**.
 
 No polling loop. No sprawling always-active tool catalog. Variable output is bounded, and intermediate work stays outside the parent context.
 
@@ -47,7 +47,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Read-only session analytics** — inspect cost, transcripts, errors, and prompt patterns without an always-active tool.
 - **Strategic context guard** — preserve full session/TUI output while projecting bounded, diagnostic-first tool evidence to models.
 - **Observable background subagents** — run real interactive Pi TUI children in tmux, with bounded sidecar delivery and an RPC fallback outside tmux.
-- **Model-free background monitoring** — watch CI, deployments, or long commands and receive one durable completion without polling.
+- **Bounded background processes** — watch finite CI gates or run persistent services with rotating searchable logs and direct TUI control.
 - **Interactive questions** — ask for bounded free text, one choice, or multiple choices without guessing.
 - **Temporary sudo** — approve each privileged command and enter a masked password that exists only in session memory.
 - **Provider-scoped Fast mode** — injects `service_tier: "priority"` only for OAuth-backed `openai-codex` requests.
@@ -170,28 +170,37 @@ Limits default to depth 3, eight children per parent run, six globally concurren
 
 A settled TUI child seals its final handoff, shows a short completion notice, and exits automatically after a brief grace period. Closing a pane early fails that run; stopping it requests an abort and then force-closes an unresponsive pane. Parent branch changes and normal shutdown cancel owned children. `/reload` is different: live tmux children are detached from the retiring extension instance and reattached by the new one using their durable lineage, pane, session, and sidecar metadata. RPC children cannot be reattached and are terminalized safely on reload.
 
-## Background monitors
+## Background processes
 
-The `background_monitor` tool runs a shell command without blocking the parent agent and pushes one durable result when the process exits. It is intended for CI checks, deployments, log sentinels, and other long waits that do not need a model-backed child. The command must block until the watched operation reaches a terminal state; `timeoutSeconds` is a generous safety deadline, not the polling window. Prefer provider-native watch commands such as `gh run watch <id> --exit-status` when available.
+The `background_process` tool runs any shell command asynchronously without spending a model-backed child. Its required mode makes the lifecycle contract explicit:
+
+- `wait` expects a terminal result, making it suitable for CI gates, deployments, and provider-native watchers such as `gh run watch <id> --exit-status`.
+- `service` expects to remain alive, making it suitable for development servers, application log streams, and similar session-owned processes. An unrequested service exit is a failure even when its exit code is zero.
 
 ```text
-background_monitor(
+background_process(
   command="gh pr checks 123 --watch --fail-fast",
+  mode="wait",
   cwd="/path/to/repo",
   timeoutSeconds=1800
 )
+
+background_process(
+  command="npm run dev",
+  mode="service",
+  cwd="/path/to/repo"
+)
 ```
 
-Each monitor receives a short ID. Combined stdout/stderr is written to a private temporary file. Automatic completion carries at most a 4 KiB tail; an explicit status request can return up to the last 500 lines or 12 KiB. Completion records status, exit code, duration, bounded output, and the full-output path. State is persisted before automatic delivery and pending results recover after reload.
-
-`monitor_control` provides compact status and cancellation:
+Each process receives a short ID. Combined stdout/stderr is retained beneath `~/.pi/agent/pi-core/processes/` in two private rotating 4 MiB segments, so noisy services cannot grow storage without bound. Terminal delivery carries at most a 4 KiB tail. `process_control` keeps all model-facing inspection bounded:
 
 | Action | Behavior |
 | --- | --- |
-| `status` | List recent monitors or retrieve one bounded terminal result |
-| `stop` | Terminate a running monitor and its process group |
+| `status` | List recent processes, or inspect one process with its command and recent log tail |
+| `search` | Lexically search retained logs while a process is running or after it exits; returns at most 4 KiB of line-numbered context |
+| `stop` | Terminate a running process and its process group |
 
-Active monitors stop on session shutdown or branch changes. No model call, polling loop, scheduler, or dashboard is involved.
+Humans can use `/ps` to inspect session-owned processes and `/stop <id|all>` to terminate them directly from the TUI. State is persisted before terminal delivery, and pending results recover after reload. Active attached process trees stop on branch changes, `/quit`, and other session shutdowns; `service` mode is not OS-level daemonization, and commands that deliberately detach themselves are outside its ownership boundary. No polling model or unbounded log transcript enters context.
 
 ## Ask the user
 

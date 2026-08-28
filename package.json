@@ -40,7 +40,7 @@
 			"./extensions/recap/index.ts",
 			"./extensions/draft-toggle/index.ts",
 			"./extensions/image-clipboard/index.ts",
-			"./extensions/monitor/index.ts",
+			"./extensions/background-process/index.ts",
 			"./extensions/memory/index.ts",
 			"./extensions/context-guard/index.ts",
 			"./extensions/sudo/index.ts",
