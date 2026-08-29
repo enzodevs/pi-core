@@ -54,6 +54,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Responsive minimal footer** — model, thinking, branch, context, cost, and extension state without render-time I/O.
 - **Interstellar theme** — a high-contrast deep-space palette, orbital π startup art, and a restrained animated working indicator.
 - **Ephemeral idle recap** — after three quiet minutes, show one tool-free sentence describing where the conversation stopped.
+- **Automatic session titles** — name new sessions from their first completed exchange without touching conversation history.
 - **Node-first TypeScript** — no Bun runtime APIs and no runtime framework beyond Pi's extension surface.
 
 ## Quickstart
@@ -229,7 +230,7 @@ Pi Core replaces the default footer with a restrained, single-line status surfac
 ◇ gpt-5.6-terra · low · git:main │                    ctx 18% · $0.14 · ⚡ fast
 ```
 
-It displays the active model and thinking level, Git branch, context usage, accumulated session cost, and extension statuses such as Fast mode. The layout progressively drops cost and branch details on narrow terminals while retaining core state.
+It displays the active model and thinking level, a renamed session's title, Git branch, context usage, and extension statuses such as Fast mode. Unnamed sessions show no title or session ID. The layout progressively drops optional title and branch details on narrow terminals while retaining core state.
 
 Rendering performs no filesystem, Git, network, or history scans. Git updates use Pi's footer watcher, cost is accumulated from message events, and width-safe Unicode characters avoid a Nerd Font dependency.
 
@@ -244,6 +245,10 @@ Select it once in Pi with `/settings` → **Theme** → `interstellar`, then run
 After Pi settles and remains idle for three minutes, Pi Core generates one compact line of up to three terse phrases describing the task, progress, and immediate next step. It appears quietly below the editor and disappears when work resumes.
 
 The recap prefers the authenticated `openai-codex/gpt-5.3-codex-spark` model at low reasoning and falls back to the active session model if Spark is unavailable or a Spark request fails. It exposes no tools and is never written to session history or added to model context. Stale or cancelled results are discarded. Pi extensions cannot observe raw editor keystrokes, so the timer resets on submitted input and agent/session activity rather than cursor movement.
+
+## Automatic session titles
+
+After the first completed user-assistant exchange, an unnamed session receives a concise title for Pi's session selector. Existing and manually assigned names are never overwritten. Generation uses only bounded excerpts from that first exchange, prefers authenticated `openai-codex/gpt-5.3-codex-spark` at low reasoning, and falls back to the active model. Failures are silent, requests are cancelled on new input or session changes, and the generated title is metadata rather than conversation history.
 
 ## OpenAI Fast mode
 

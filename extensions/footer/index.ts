@@ -1,48 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-interface UsageLike {
-	cost?: { total?: number };
-}
-
-interface MessageLike {
-	role?: string;
-	usage?: UsageLike;
-}
-
-interface EntryLike {
-	type?: string;
-	message?: MessageLike;
-	usage?: UsageLike;
-}
-
-export function messageCost(message: MessageLike): number {
-	return message.role === "assistant" || message.role === "toolResult"
-		? (message.usage?.cost?.total ?? 0)
-		: 0;
-}
-
-export function entryCost(entry: EntryLike): number {
-	if (entry.type === "message" && entry.message) return messageCost(entry.message);
-	if (entry.type === "compaction" || entry.type === "branch_summary") {
-		return entry.usage?.cost?.total ?? 0;
-	}
-	return 0;
-}
-
-function branchCost(ctx: ExtensionContext): number {
-	let total = 0;
-	for (const entry of ctx.sessionManager.getBranch()) total += entryCost(entry as EntryLike);
-	return total;
-}
-
-function formatCost(cost: number): string {
-	if (cost <= 0) return "";
-	if (cost < 0.01) return `$${cost.toFixed(3)}`;
-	if (cost < 10) return `$${cost.toFixed(2)}`;
-	return `$${cost.toFixed(0)}`;
-}
-
 function contextLabel(ctx: ExtensionContext): string {
 	const usage = ctx.getContextUsage();
 	if (!usage || usage.percent === null) return "ctx —";
@@ -51,19 +9,21 @@ function contextLabel(ctx: ExtensionContext): string {
 
 export function chooseFooterParts(
 	width: number,
-	parts: { model: string; branch?: string; context: string; cost?: string; statuses?: string[] },
+	parts: { model: string; sessionName?: string; branch?: string; context: string; statuses?: string[] },
 ): { left: string; right: string } {
 	const separator = " · ";
 	const dividerWidth = 3;
 	const statuses = (parts.statuses ?? []).filter(Boolean);
-	const leftParts = [parts.model, parts.branch ? `git:${parts.branch}` : ""].filter(Boolean);
-	const rightParts = [parts.context, parts.cost ?? "", ...statuses].filter(Boolean);
+	const sessionLabel = parts.sessionName ? truncateToWidth(parts.sessionName, 36, "…") : "";
+	const branchLabel = parts.branch ? `git:${parts.branch}` : "";
+	const leftParts = [parts.model, sessionLabel, branchLabel].filter(Boolean);
+	const rightParts = [parts.context, ...statuses].filter(Boolean);
 
 	const measure = () =>
 		visibleWidth(leftParts.join(separator)) + dividerWidth + visibleWidth(rightParts.join(separator));
 
-	if (measure() > width && parts.cost) rightParts.splice(rightParts.indexOf(parts.cost), 1);
-	if (measure() > width && parts.branch) leftParts.splice(1, 1);
+	if (measure() > width && branchLabel) leftParts.splice(leftParts.indexOf(branchLabel), 1);
+	if (measure() > width && sessionLabel) leftParts.splice(leftParts.indexOf(sessionLabel), 1);
 	if (measure() > width && statuses.length > 0) rightParts.splice(rightParts.indexOf(parts.context), 1);
 	if (measure() > width) {
 		const statusText = statuses.join(separator);
@@ -79,27 +39,14 @@ export function chooseFooterParts(
 }
 
 export default function minimalFooter(pi: ExtensionAPI): void {
-	let sessionCost = 0;
 	let activeTui: { requestRender(): void } | undefined;
 
-	pi.on("message_end", (event) => {
-		sessionCost += messageCost(event.message as MessageLike);
-		activeTui?.requestRender();
-	});
-
-	pi.on("agent_end", (_event, ctx) => {
-		sessionCost = branchCost(ctx);
-		activeTui?.requestRender();
-	});
 	pi.on("model_select", () => activeTui?.requestRender());
 	pi.on("thinking_level_select", () => activeTui?.requestRender());
-	pi.on("session_tree", (_event, ctx) => {
-		sessionCost = branchCost(ctx);
-		activeTui?.requestRender();
-	});
+	pi.on("session_tree", () => activeTui?.requestRender());
+	pi.on("session_info_changed", () => activeTui?.requestRender());
 
 	pi.on("session_start", (_event, ctx) => {
-		sessionCost = branchCost(ctx);
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			activeTui = tui;
 			const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
@@ -118,9 +65,9 @@ export default function minimalFooter(pi: ExtensionAPI): void {
 					const statuses = [...footerData.getExtensionStatuses().values()];
 					const parts = chooseFooterParts(width, {
 						model: modelLabel,
+						sessionName: pi.getSessionName(),
 						branch: footerData.getGitBranch() ?? undefined,
 						context: contextLabel(ctx),
-						cost: formatCost(sessionCost) || undefined,
 						statuses,
 					});
 
