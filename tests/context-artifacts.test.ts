@@ -60,6 +60,37 @@ describe("context artifact store", () => {
 		expect(store.search(artifact?.metadata.id ?? "", "other-session", "store.ts")).toBeUndefined();
 	});
 
+	it("ranks multi-term matches while including useful partial matches", () => {
+		const store = new ArtifactStore({ root: root() });
+		const artifact = store.store({
+			toolCallId: "call-ranked",
+			toolName: "bash",
+			sessionId: "s1",
+			content: `${"noise\n".repeat(2000)}Grafana dashboards\nunrelated\nOpenTelemetry Collector exports traces\nOpenTelemetry SDK setup`,
+		});
+		const result = store.search(artifact?.metadata.id ?? "", "s1", "OpenTelemetry Collector traces", 2);
+
+		expect(result?.matches).toBe(2);
+		expect(result?.text).toContain("ranked; partial term matches included");
+		expect(result?.text).toContain("OpenTelemetry Collector exports traces");
+		expect(result?.text).toContain("OpenTelemetry SDK setup");
+		expect(result?.text).not.toContain("Grafana dashboards");
+	});
+
+	it("preserves source order when equally ranked lines are returned", () => {
+		const store = new ArtifactStore({ root: root() });
+		const artifact = store.store({
+			toolCallId: "call-ranked-order",
+			toolName: "bash",
+			sessionId: "s1",
+			content: `${"noise\n".repeat(2000)}alpha first\nunrelated\nbeta second`,
+		});
+		const result = store.search(artifact?.metadata.id ?? "", "s1", "alpha beta");
+
+		expect(result?.matches).toBe(2);
+		expect(result?.text.indexOf("alpha first")).toBeLessThan(result?.text.indexOf("beta second") ?? 0);
+	});
+
 	it("centers bounded snippets around matches inside huge single lines", () => {
 		const store = new ArtifactStore({ root: root() });
 		const artifact = store.store({

@@ -263,24 +263,40 @@ export class ArtifactStore {
 		const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_.:/-]{2,}/gu) ?? [])];
 		if (terms.length === 0) throw new Error("Search query requires a word or identifier.");
 		const lines = (stored.content ?? "").split("\n");
+		const phrase = query.trim().toLowerCase();
+		const candidates = lines.flatMap((line, index) => {
+			const lower = line.toLowerCase();
+			const matchedTerms = terms.filter((term) => lower.includes(term));
+			return matchedTerms.length === 0
+				? []
+				: [{ index, matchedTerms: matchedTerms.length, phraseMatch: lower.includes(phrase) }];
+		});
+		candidates.sort(
+			(a, b) =>
+				b.matchedTerms - a.matchedTerms || Number(b.phraseMatch) - Number(a.phraseMatch) || a.index - b.index,
+		);
+		const ranked = candidates.slice(0, limit);
 		const selected = new Set<number>();
-		let matches = 0;
-		for (let index = 0; index < lines.length && matches < limit; index++) {
-			const lower = lines[index]?.toLowerCase() ?? "";
-			if (!terms.every((term) => lower.includes(term))) continue;
-			matches++;
-			for (let around = Math.max(0, index - 1); around <= Math.min(lines.length - 1, index + 1); around++) {
+		for (const candidate of ranked) {
+			for (
+				let around = Math.max(0, candidate.index - 1);
+				around <= Math.min(lines.length - 1, candidate.index + 1);
+				around++
+			) {
 				selected.add(around);
 			}
 		}
+		const matches = ranked.length;
 		const rendered = [...selected]
 			.sort((a, b) => a - b)
 			.map((index) => `${index + 1}:${lineSnippet(lines[index] ?? "", terms)}`)
 			.join("\n");
+		const searchNote = terms.length > 1 ? " (ranked; partial term matches included)" : "";
+		const truncationNote = artifact.metadata.truncated ? " (stored prefix is truncated)" : "";
 		const marker =
 			matches === 0
 				? `0 matches in ${id}`
-				: `${matches} match${matches === 1 ? "" : "es"} in ${id}${artifact.metadata.truncated ? " (stored prefix is truncated)" : ""}`;
+				: `${matches} match${matches === 1 ? "" : "es"} in ${id}${searchNote}${truncationNote}`;
 		const available = Math.max(0, LOOKUP_MAX_BYTES - Buffer.byteLength(marker) - 2);
 		return {
 			artifact: artifact.metadata,
