@@ -165,12 +165,5 @@ export default function sessionCwd(pi: ExtensionAPI): void {
 		updateStatus(ctx);
 	});
 
-	pi.on("before_agent_start", async (event) => {
-		if (state.current === original) return;
-		return {
-			systemPrompt: `${event.systemPrompt}\n\nThe active session working directory is ${state.current}. Relative paths used by built-in tools resolve from there.`,
-		};
-	});
-
 	pi.on("session_shutdown", (_event, ctx) => ctx.ui.setStatus(STATUS_ID, undefined));
 }
