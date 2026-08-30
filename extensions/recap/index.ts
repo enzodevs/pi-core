@@ -8,6 +8,10 @@ import { Text } from "@earendil-works/pi-tui";
 
 export const DEFAULT_RECAP_DELAY_MS = 3 * 60 * 1000;
 export const MIN_RECAP_ASSISTANT_CHARS = 200;
+export const RECAP_CONTEXT_MAX_MESSAGES = 8;
+export const RECAP_CONTEXT_MAX_CHARS = 12_000;
+export const RECAP_MESSAGE_MAX_CHARS = 4_000;
+export const RECAP_MAX_WORDS = 12;
 export const RECAP_WIDGET_KEY = "pi-core-recap";
 export const RECAP_MODEL_PROVIDER = "openai-codex";
 export const RECAP_MODEL_ID = "gpt-5.3-codex-spark";
@@ -18,6 +22,66 @@ export const RECAP_SYSTEM_PROMPT =
 
 export function recapMessages(messages: unknown[]): ReturnType<typeof convertToLlm> {
 	return convertToLlm(messages as Parameters<typeof convertToLlm>[0]);
+}
+
+function boundedTextContent(content: unknown, remaining: number): unknown[] {
+	if (!Array.isArray(content) || remaining <= 0) return [];
+	const bounded: unknown[] = [];
+	let available = remaining;
+	for (const part of content) {
+		if (
+			typeof part !== "object" ||
+			part === null ||
+			(part as { type?: unknown }).type !== "text" ||
+			typeof (part as { text?: unknown }).text !== "string"
+		) {
+			continue;
+		}
+		const text = Array.from((part as { text: string }).text)
+			.slice(0, available)
+			.join("");
+		if (text.length === 0) continue;
+		bounded.push({ ...part, text });
+		available -= Array.from(text).length;
+		if (available <= 0) break;
+	}
+	return bounded;
+}
+
+export function boundedRecapMessages(
+	messages: ReturnType<typeof convertToLlm>,
+): ReturnType<typeof convertToLlm> {
+	const selectedIndices = new Set<number>();
+	for (const role of ["user", "assistant"]) {
+		for (let index = messages.length - 1; index >= 0; index--) {
+			if (messages[index]?.role !== role) continue;
+			selectedIndices.add(index);
+			break;
+		}
+	}
+	for (
+		let index = messages.length - 1;
+		index >= 0 && selectedIndices.size < RECAP_CONTEXT_MAX_MESSAGES;
+		index--
+	) {
+		selectedIndices.add(index);
+	}
+
+	const selected: ReturnType<typeof convertToLlm> = [];
+	let remaining = RECAP_CONTEXT_MAX_CHARS;
+	for (const index of [...selectedIndices].sort((left, right) => left - right)) {
+		const message = messages[index] as unknown as { content?: unknown };
+		const content = boundedTextContent(message.content, Math.min(remaining, RECAP_MESSAGE_MAX_CHARS));
+		const used = content.reduce<number>(
+			(total, part) => total + Array.from((part as { text: string }).text).length,
+			0,
+		);
+		if (used === 0) continue;
+		selected.push({ ...message, content } as ReturnType<typeof convertToLlm>[number]);
+		remaining -= used;
+		if (remaining <= 0) break;
+	}
+	return selected;
 }
 
 export function latestAssistantTextLength(messages: unknown[]): number {
@@ -61,7 +125,8 @@ export function normalizeRecap(text: string): string {
 		.find(Boolean);
 	if (!line) return "";
 
-	return line.replace(/^(["'`]|[-*]\s)+|(["'`])$/g, "").replace(/\s+/g, " ");
+	const normalized = line.replace(/^(["'`]|[-*]\s)+|(["'`])$/g, "").replace(/\s+/g, " ");
+	return normalized.split(/\s+/u).slice(0, RECAP_MAX_WORDS).join(" ");
 }
 
 export default function idleRecap(pi: ExtensionAPI): void {
@@ -92,8 +157,10 @@ export default function idleRecap(pi: ExtensionAPI): void {
 		timer = undefined;
 		if (scheduledGeneration !== generation || !ctx.isIdle() || !ctx.model) return;
 
-		const messages = recapMessages(
-			buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).messages,
+		const messages = boundedRecapMessages(
+			recapMessages(
+				buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).messages,
+			),
 		);
 		if (messages.length === 0 || latestAssistantTextLength(messages) < MIN_RECAP_ASSISTANT_CHARS) return;
 

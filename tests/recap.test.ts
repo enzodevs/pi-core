@@ -1,10 +1,13 @@
 import { buildSessionContext, type convertToLlm, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
+	boundedRecapMessages,
 	latestAssistantTextLength,
 	MIN_RECAP_ASSISTANT_CHARS,
 	normalizeRecap,
 	preferredRecapModel,
+	RECAP_CONTEXT_MAX_MESSAGES,
+	RECAP_MESSAGE_MAX_CHARS,
 	RECAP_MODEL_ID,
 	RECAP_MODEL_PROVIDER,
 	recapMessages,
@@ -81,6 +84,28 @@ describe("idle recap", () => {
 		expect(JSON.stringify(messages)).not.toContain("Abandoned branch");
 	});
 
+	it("bounds recap context to recent visible text", () => {
+		type ProviderMessage = ReturnType<typeof convertToLlm>[number];
+		const messages = Array.from({ length: RECAP_CONTEXT_MAX_MESSAGES + 3 }, (_, index) => ({
+			role: index % 2 === 0 ? "user" : "assistant",
+			content: [
+				{ type: "thinking", thinking: "private reasoning" },
+				{ type: "text", text: `${index}:${"x".repeat(RECAP_MESSAGE_MAX_CHARS + 20)}` },
+			],
+			timestamp: index,
+		})) as ProviderMessage[];
+
+		const bounded = boundedRecapMessages(messages);
+		expect(bounded.length).toBeLessThanOrEqual(RECAP_CONTEXT_MAX_MESSAGES);
+		expect(bounded.length).toBeGreaterThan(0);
+		expect(JSON.stringify(bounded)).not.toContain("private reasoning");
+		expect(JSON.stringify(bounded)).not.toContain('"0:');
+		for (const message of bounded) {
+			const text = (message.content[0] as { text: string }).text;
+			expect(Array.from(text).length).toBeLessThanOrEqual(RECAP_MESSAGE_MAX_CHARS);
+		}
+	});
+
 	it("measures only the latest assistant's visible text", () => {
 		const messages = [
 			{ role: "assistant", content: [{ type: "text", text: "x".repeat(MIN_RECAP_ASSISTANT_CHARS) }] },
@@ -119,10 +144,11 @@ describe("idle recap", () => {
 		);
 	});
 
-	it("does not truncate a complete recap", () => {
+	it("enforces the recap word limit", () => {
 		const recap =
 			"You reviewed anti-slop, ran a read-only trial on UniAlgo with a detached worktree, and found about 1,313 strict hits.";
-		expect(normalizeRecap(recap)).toBe(recap);
-		expect(normalizeRecap(recap)).not.toContain("…");
+		expect(normalizeRecap(recap)).toBe(
+			"You reviewed anti-slop, ran a read-only trial on UniAlgo with a detached",
+		);
 	});
 });
