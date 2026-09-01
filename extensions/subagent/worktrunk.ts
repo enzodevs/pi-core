@@ -7,6 +7,11 @@ const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const DEPENDENCY_DIRS = ["vendor", "node_modules", ".venv"] as const;
 
 export type WorkspaceMode = "inherit" | "worktree";
+export type WorkspaceSetup =
+	| "not_applicable"
+	| "pre_start_completed"
+	| "no_pre_start_hook"
+	| "existing_worktree";
 
 export interface WorktreeWorkspace {
 	mode: WorkspaceMode;
@@ -14,6 +19,7 @@ export interface WorktreeWorkspace {
 	branch?: string;
 	created: boolean;
 	linkedWorktree: boolean;
+	setup: WorkspaceSetup;
 }
 
 export interface CommandResult {
@@ -85,7 +91,7 @@ function assertDependencyIsolation(worktreeRoot: string): void {
 		const resolved = fs.realpathSync(candidate);
 		if (`${resolved}${path.sep}`.startsWith(normalizedRoot)) continue;
 		throw new Error(
-			`Unsafe shared dependency directory: ${directory} resolves outside the Worktrunk worktree. Configure a Worktrunk post-create hook to install dependencies inside each worktree.`,
+			`Unsafe shared dependency directory: ${directory} resolves outside the Worktrunk worktree. Configure a blocking Worktrunk pre-start hook to install dependencies inside each worktree.`,
 		);
 	}
 }
@@ -107,7 +113,13 @@ export async function prepareWorkspace(options: {
 	run?: CommandRunner;
 }): Promise<WorktreeWorkspace> {
 	if (options.mode === "inherit") {
-		return { mode: "inherit", cwd: options.cwd, created: false, linkedWorktree: false };
+		return {
+			mode: "inherit",
+			cwd: options.cwd,
+			created: false,
+			linkedWorktree: false,
+			setup: "not_applicable",
+		};
 	}
 	const run = options.run ?? defaultCommandRunner;
 	let root: string;
@@ -132,10 +144,21 @@ export async function prepareWorkspace(options: {
 	}
 	if (path.resolve(gitDir) !== path.resolve(commonDir)) {
 		assertDependencyIsolation(root);
-		return { mode: "worktree", cwd: root, created: false, linkedWorktree: true };
+		return {
+			mode: "worktree",
+			cwd: root,
+			created: false,
+			linkedWorktree: true,
+			setup: "existing_worktree",
+		};
 	}
 	const branch = worktreeBranch(options.agent, options.id);
+	let hookConfigured: boolean;
 	try {
+		const hookPreview = await run("wt", ["-C", root, "hook", "pre-start", "--dry-run"], root);
+		hookConfigured = !`${hookPreview.stdout}\n${hookPreview.stderr}`.includes(
+			"No pre-start hooks configured",
+		);
 		await run("wt", ["-C", root, "switch", "--create", branch, "--base", "HEAD"], root);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -149,5 +172,12 @@ export async function prepareWorkspace(options: {
 	if (!worktreeRoot)
 		throw new Error(`Worktrunk created ${branch}, but Git did not report its worktree path.`);
 	assertDependencyIsolation(worktreeRoot);
-	return { mode: "worktree", cwd: worktreeRoot, branch, created: true, linkedWorktree: true };
+	return {
+		mode: "worktree",
+		cwd: worktreeRoot,
+		branch,
+		created: true,
+		linkedWorktree: true,
+		setup: hookConfigured ? "pre_start_completed" : "no_pre_start_hook",
+	};
 }

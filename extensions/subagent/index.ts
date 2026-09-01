@@ -29,7 +29,12 @@ import {
 	runAgent,
 } from "./runner.ts";
 import { createTmuxChildBridge } from "./tui-bridge.ts";
-import { prepareWorkspace, type WorkspaceMode, type WorktreeWorkspace } from "./worktrunk.ts";
+import {
+	prepareWorkspace,
+	type WorkspaceMode,
+	type WorkspaceSetup,
+	type WorktreeWorkspace,
+} from "./worktrunk.ts";
 
 const MAX_RECENT_RUNS = 20;
 const ENTRY_TYPE = "pi-core-agent-run";
@@ -86,6 +91,7 @@ export interface ManagedRun {
 	workspace?: WorkspaceMode;
 	worktreeBranch?: string;
 	worktreeCreated?: boolean;
+	workspaceSetup?: WorkspaceSetup;
 	status: RunStatus;
 	activity: "starting" | "running" | "waiting";
 	delivery: DeliveryStatus;
@@ -154,6 +160,7 @@ export function snapshotRun(run: ManagedRun, transition = false): PersistedRun {
 		workspace: run.workspace,
 		worktreeBranch: run.worktreeBranch,
 		worktreeCreated: run.worktreeCreated,
+		workspaceSetup: run.workspaceSetup,
 		status: run.status,
 		activity: run.activity,
 		delivery: run.delivery,
@@ -173,6 +180,15 @@ export function snapshotRun(run: ManagedRun, transition = false): PersistedRun {
 		ancestry: [...run.ancestry],
 		runtime: run.runtime,
 	};
+}
+
+function workspaceSetupText(workspace: WorktreeWorkspace): string {
+	if (workspace.setup === "pre_start_completed") return "project pre-start hook completed";
+	if (workspace.setup === "no_pre_start_hook")
+		return "no project pre-start hook configured; verify dependencies before running checks";
+	if (workspace.setup === "existing_worktree")
+		return "existing worktree reused; verify dependencies before running checks";
+	return "inherited workspace";
 }
 
 function completionText(run: ManagedRun): string {
@@ -331,6 +347,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 							cwd: run.cwd,
 							branch: run.worktreeBranch,
 							created: run.worktreeCreated ?? false,
+							setup: run.workspaceSetup ?? "not_applicable",
 						},
 					},
 				},
@@ -677,6 +694,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				workspace: workspace.mode,
 				worktreeBranch: workspace.branch,
 				worktreeCreated: workspace.created,
+				workspaceSetup: workspace.setup,
 				status: "running",
 				activity: "starting",
 				delivery: "none",
@@ -691,13 +709,21 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			persist(run);
 			updateStatus();
 
-			supervise(run, agent, ctx, lineage, lease, runAgent, {
+			const workspaceAgent =
+				workspace.mode === "worktree"
+					? {
+							...agent,
+							systemPrompt: `${agent.systemPrompt}\n\nRuntime workspace: Worktrunk linked worktree. Setup: ${workspaceSetupText(workspace)}. Keep all generated dependencies inside this worktree.`,
+						}
+					: agent;
+			supervise(run, workspaceAgent, ctx, lineage, lease, runAgent, {
 				model,
 				thinking: params.thinking,
 			});
 
+			const setup = workspace.mode === "worktree" ? `\nsetup: ${workspaceSetupText(workspace)}` : "";
 			return {
-				content: [{ type: "text", text: `started ${agent.name} ${id}` }],
+				content: [{ type: "text", text: `started ${agent.name} ${id}${setup}` }],
 				details: {
 					protocol: CHILD_START_PROTOCOL,
 					status: "available",

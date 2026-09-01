@@ -27,11 +27,15 @@ function runnerFor(options: {
 	linked?: boolean;
 	dirty?: boolean;
 	onWorktrunk?: (args: string[]) => void;
+	hookConfigured?: boolean;
 }): CommandRunner {
 	return async (command, args) => {
 		const joined = args.join(" ");
 		if (command === "wt") {
 			options.onWorktrunk?.(args);
+			if (joined.includes("hook pre-start --dry-run") && options.hookConfigured === false) {
+				return { stdout: "", stderr: "No pre-start hooks configured" };
+			}
 			return { stdout: "", stderr: "" };
 		}
 		if (joined === "rev-parse --show-toplevel") return { stdout: `${options.root}\n`, stderr: "" };
@@ -71,7 +75,13 @@ describe("Worktrunk workspace policy", () => {
 		};
 		await expect(
 			prepareWorkspace({ mode: "inherit", cwd: "/tmp/project", agent: "worker", id: "abc", run }),
-		).resolves.toEqual({ mode: "inherit", cwd: "/tmp/project", created: false, linkedWorktree: false });
+		).resolves.toEqual({
+			mode: "inherit",
+			cwd: "/tmp/project",
+			created: false,
+			linkedWorktree: false,
+			setup: "not_applicable",
+		});
 	});
 
 	it("reuses an existing linked worktree", async () => {
@@ -83,7 +93,13 @@ describe("Worktrunk workspace policy", () => {
 			id: "abc12345",
 			run: runnerFor({ root: worktree, worktree, linked: true }),
 		});
-		expect(result).toEqual({ mode: "worktree", cwd: worktree, created: false, linkedWorktree: true });
+		expect(result).toEqual({
+			mode: "worktree",
+			cwd: worktree,
+			created: false,
+			linkedWorktree: true,
+			setup: "existing_worktree",
+		});
 	});
 
 	it("creates a clean primary-checkout worktree through Worktrunk", async () => {
@@ -103,7 +119,20 @@ describe("Worktrunk workspace policy", () => {
 			branch: "pi-agent/worker-abc12345",
 			created: true,
 			linkedWorktree: true,
+			setup: "pre_start_completed",
 		});
+	});
+
+	it("reports when no project dependency setup hook is configured", async () => {
+		const { root, worktree } = fixture();
+		const result = await prepareWorkspace({
+			mode: "worktree",
+			cwd: root,
+			agent: "worker",
+			id: "abc12345",
+			run: runnerFor({ root, worktree, hookConfigured: false }),
+		});
+		expect(result.setup).toBe("no_pre_start_hook");
 	});
 
 	it("fails before Worktrunk when the primary checkout is dirty", async () => {
