@@ -11,6 +11,8 @@ function mimeTypeForPreview(filePath: string): string {
 }
 
 class ImageClipboardEditor extends CustomEditor {
+	private submitting = false;
+
 	constructor(
 		tui: TUI,
 		theme: EditorTheme,
@@ -23,7 +25,9 @@ class ImageClipboardEditor extends CustomEditor {
 
 	override setText(text: string): void {
 		super.setText(text);
-		this.reconcileDraft();
+		// The base editor clears itself synchronously while submitting. Preserve
+		// attachments until the input event converts them to image content.
+		if (!this.submitting) this.reconcileDraft();
 	}
 
 	override insertTextAtCursor(text: string): void {
@@ -33,6 +37,16 @@ class ImageClipboardEditor extends CustomEditor {
 	}
 
 	override handleInput(data: string): void {
+		if (this.imageKeybindings.matches(data, "tui.input.submit")) {
+			this.submitting = true;
+			try {
+				super.handleInput(data);
+			} finally {
+				this.submitting = false;
+			}
+			return;
+		}
+
 		const pasteStart = "\x1b[200~";
 		const pasteEnd = "\x1b[201~";
 		const pastedText =
