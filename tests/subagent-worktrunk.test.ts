@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverAgents } from "../extensions/subagent/agents.ts";
+import { type AgentConfig, discoverAgents, mergeAgentLayers } from "../extensions/subagent/agents.ts";
 import { type CommandRunner, prepareWorkspace, worktreeBranch } from "../extensions/subagent/worktrunk.ts";
 
 const roots: string[] = [];
@@ -62,6 +62,49 @@ function runnerFor(options: {
 }
 
 describe("Worktrunk workspace policy", () => {
+	const profile = (overrides: Partial<AgentConfig>): AgentConfig => ({
+		name: "worker",
+		description: "worker",
+		tools: ["read"],
+		children: [],
+		systemPrompt: "work",
+		source: "bundled",
+		filePath: "/bundled/worker.md",
+		...overrides,
+	});
+
+	it("preserves bundled workspace safety across user profile overrides", () => {
+		const [worker] = mergeAgentLayers(
+			[
+				profile({
+					workspace: "worktree",
+					workspaceSource: "bundled",
+				}),
+			],
+			[
+				profile({
+					model: "openai/gpt",
+					source: "user",
+					filePath: "/user/worker.md",
+				}),
+			],
+		);
+		expect(worker).toMatchObject({
+			model: "openai/gpt",
+			source: "user",
+			workspace: "worktree",
+			workspaceSource: "bundled",
+		});
+	});
+
+	it("honors an explicit user workspace opt-out", () => {
+		const [worker] = mergeAgentLayers(
+			[profile({ workspace: "worktree", workspaceSource: "bundled" })],
+			[profile({ workspace: "inherit", workspaceSource: "user", source: "user" })],
+		);
+		expect(worker).toMatchObject({ workspace: "inherit", workspaceSource: "user" });
+	});
+
 	it("marks the bundled writing worker for Worktrunk isolation", () => {
 		const worker = discoverAgents(path.join(os.tmpdir(), "pi-core-no-user-agents"), "project").agents.find(
 			(agent) => agent.name === "worker",

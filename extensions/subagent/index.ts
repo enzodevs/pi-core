@@ -721,15 +721,29 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				thinking: params.thinking,
 			});
 
-			const setup = workspace.mode === "worktree" ? `\nsetup: ${workspaceSetupText(workspace)}` : "";
+			const workspaceText =
+				workspace.mode === "worktree"
+					? `Worktrunk worktree${workspace.branch ? ` (${workspace.branch})` : ""}\nsetup: ${workspaceSetupText(workspace)}`
+					: "inherited cwd";
+			const policySource = params.workspace
+				? "call override"
+				: agent.workspaceSource
+					? `${agent.workspaceSource} profile policy`
+					: "profile default";
 			return {
-				content: [{ type: "text", text: `started ${agent.name} ${id}${setup}` }],
+				content: [{ type: "text", text: `started ${agent.name} ${id}\nworkspace: ${workspaceText}` }],
 				details: {
 					protocol: CHILD_START_PROTOCOL,
 					status: "available",
 					id,
 					depth: lineage.depth,
 					workspace,
+					profile: {
+						source: agent.source,
+						filePath: agent.filePath,
+						workspacePolicy: workspaceMode,
+						workspacePolicySource: policySource,
+					},
 				},
 			};
 		},
@@ -761,9 +775,18 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 					`global concurrency: ${capacity.active}/${capacity.limit}`,
 					recent.length ? recent.map(compactStatus).join("\n") : "0 runs",
 				].join("\n");
+				const profiles = discoverAgents(currentCtx?.cwd ?? process.cwd(), "user")
+					.agents.slice(0, MAX_RECENT_RUNS)
+					.map((agent) => ({
+						name: agent.name,
+						source: agent.source,
+						filePath: agent.filePath,
+						workspacePolicy: agent.workspace ?? "inherit",
+						workspacePolicySource: agent.workspaceSource ?? agent.source,
+					}));
 				return {
 					content: [{ type: "text", text: summary }],
-					details: { capacity, active, total: directRuns.length } as Record<string, unknown>,
+					details: { capacity, active, total: directRuns.length, profiles } as Record<string, unknown>,
 				};
 			}
 

@@ -15,6 +15,7 @@ export interface AgentConfig {
 	children?: string[];
 	model?: string;
 	workspace?: "inherit" | "worktree";
+	workspaceSource?: "bundled" | "user" | "project";
 	systemPrompt: string;
 	source: "bundled" | "user" | "project";
 	filePath: string;
@@ -110,6 +111,7 @@ function loadAgentsFromDir(dir: string, source: AgentConfig["source"]): AgentCon
 			children: parseNameList(frontmatter.children),
 			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
 			workspace,
+			workspaceSource: workspace ? source : undefined,
 			systemPrompt: body,
 			source,
 			filePath,
@@ -139,6 +141,25 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 	}
 }
 
+export function mergeAgentLayers(...layers: AgentConfig[][]): AgentConfig[] {
+	const agentMap = new Map<string, AgentConfig>();
+	for (const layer of layers) {
+		for (const agent of layer) {
+			const previous = agentMap.get(agent.name);
+			if (agent.workspace === undefined && previous?.workspace !== undefined) {
+				agentMap.set(agent.name, {
+					...agent,
+					workspace: previous.workspace,
+					workspaceSource: previous.workspaceSource ?? previous.source,
+				});
+			} else {
+				agentMap.set(agent.name, agent);
+			}
+		}
+	}
+	return [...agentMap.values()];
+}
+
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const bundledDir = path.join(import.meta.dirname, "agents");
 	const userDir = path.join(getAgentDir(), "agents");
@@ -149,10 +170,8 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const projectAgents =
 		scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
 
-	const agentMap = new Map<string, AgentConfig>();
-	for (const agent of bundledAgents) agentMap.set(agent.name, agent);
-	for (const agent of userAgents) agentMap.set(agent.name, agent);
-	for (const agent of projectAgents) agentMap.set(agent.name, agent);
-
-	return { agents: Array.from(agentMap.values()), projectAgentsDir };
+	return {
+		agents: mergeAgentLayers(bundledAgents, userAgents, projectAgents),
+		projectAgentsDir,
+	};
 }
