@@ -118,29 +118,25 @@ export function createChildLineage(params: {
 
 export type DelegationDecision =
 	| { allowed: true }
-	| { allowed: false; code: "unknown" | "permission" | "depth" | "children" | "self"; reason: string };
+	| {
+			allowed: false;
+			code: "unknown_agent" | "not_permitted" | "max_depth" | "self";
+			reason: string;
+	  };
 
 export function decideDelegation(params: {
 	lineage: ChildLineage | null;
 	target: string;
 	knownAgents: ReadonlySet<string>;
-	childrenStarted: number;
 	limits: SubagentLimits;
 }): DelegationDecision {
 	if (!params.knownAgents.has(params.target)) {
-		return { allowed: false, code: "unknown", reason: `Unknown agent: ${params.target}.` };
-	}
-	if (params.childrenStarted >= params.limits.maxChildrenPerRun) {
-		return {
-			allowed: false,
-			code: "children",
-			reason: `Child limit reached (${params.limits.maxChildrenPerRun} per parent run).`,
-		};
+		return { allowed: false, code: "unknown_agent", reason: `Unknown agent: ${params.target}.` };
 	}
 	if ((params.lineage?.depth ?? 0) >= params.limits.maxDepth) {
 		return {
 			allowed: false,
-			code: "depth",
+			code: "max_depth",
 			reason: `Delegation depth limit reached (${params.limits.maxDepth}).`,
 		};
 	}
@@ -150,7 +146,7 @@ export function decideDelegation(params: {
 	if (params.lineage && !params.lineage.allowedChildren.includes(params.target)) {
 		return {
 			allowed: false,
-			code: "permission",
+			code: "not_permitted",
 			reason: `Agent ${params.lineage.agent} may delegate only to: ${params.lineage.allowedChildren.join(", ") || "none"}.`,
 		};
 	}

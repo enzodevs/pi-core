@@ -19,7 +19,7 @@ import {
 	ownsDirectChild,
 	type PendingQuestion,
 } from "./protocol.ts";
-import { type ConcurrencyLease, GlobalConcurrencyRegistry } from "./registry.ts";
+import { type ConcurrencyLease, GlobalConcurrencyLimitError, GlobalConcurrencyRegistry } from "./registry.ts";
 import {
 	attachAgent,
 	type ChildHandle,
@@ -202,7 +202,6 @@ export function normalizePersistedRun(value: PersistedRun): PersistedRun | null 
 		return null;
 	}
 	const legacyTopLevel =
-		childLineage === null &&
 		value.parentRunId === undefined &&
 		value.rootRunId === undefined &&
 		value.depth === undefined &&
@@ -252,7 +251,6 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 
 	const tuiBridge = childLineage ? createTmuxChildBridge(pi, childLineage, limits) : undefined;
 	const runs = new Map<string, ManagedRun>();
-	const startedIds = new Set<string>();
 	const concurrency = new GlobalConcurrencyRegistry({
 		filePath: registryPath,
 		limit: limits.globalConcurrency,
@@ -447,7 +445,6 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			run.child?.abort();
 		}
 		runs.clear();
-		startedIds.clear();
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
 			const patch = entry.data as PersistedRun;
@@ -461,7 +458,6 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			const normalized = normalizePersistedRun(patch);
 			if (!normalized || !ownsDirectChild(childLineage, normalized as ManagedRun)) continue;
 			runs.set(patch.id, { ...normalized, generation: branchGeneration } as ManagedRun);
-			startedIds.add(patch.id);
 		}
 		const agents = discoverAgents(ctx.cwd, "user").agents;
 		for (const run of runs.values()) {
@@ -576,7 +572,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		name: "background_agent",
 		label: "Background Agent",
 		description:
-			"Start substantial independent work in an isolated child. Returns an ID; completion or one blocking question is pushed automatically. Do not poll.",
+			"Start substantial independent work in an isolated child. Returns an ID and pushes completion or one blocking question automatically. Starts are unlimited; global concurrency and delegation depth remain bounded. Do not poll; use agent_control status for capacity.",
 		promptGuidelines: [
 			"Use background_agent only for substantial independent work where isolation or parallelism materially helps; never poll for completion.",
 		],
@@ -589,10 +585,14 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				lineage: childLineage,
 				target: params.agent,
 				knownAgents: known,
-				childrenStarted: startedIds.size,
 				limits,
 			});
-			if (!decision.allowed) throw new Error(decision.reason);
+			if (!decision.allowed) {
+				return {
+					content: [{ type: "text", text: decision.reason }],
+					details: { protocol: CHILD_START_PROTOCOL, status: decision.code },
+				};
+			}
 			const agent = agents.find((candidate) => candidate.name === params.agent) as AgentConfig;
 
 			const cwd = path.resolve(ctx.cwd, params.cwd ?? ctx.cwd);
@@ -611,7 +611,27 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				limits,
 				registryPath,
 			});
-			const lease = await concurrency.claim(id);
+			let lease: ConcurrencyLease;
+			try {
+				lease = await concurrency.claim(id);
+			} catch (error) {
+				if (!(error instanceof GlobalConcurrencyLimitError)) throw error;
+				const capacity = await concurrency.capacity();
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Global concurrency is full (${capacity.active}/${capacity.limit}). This is temporary; wait for an active child to settle.`,
+						},
+					],
+					details: {
+						protocol: CHILD_START_PROTOCOL,
+						status: "temporarily_blocked",
+						capacity,
+						error: error instanceof Error ? error.message : String(error),
+					},
+				};
+			}
 			const run: ManagedRun = {
 				id,
 				agent: agent.name,
@@ -628,7 +648,6 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				generation: branchGeneration,
 			};
 			runs.set(id, run);
-			startedIds.add(id);
 			persist(run);
 			updateStatus();
 
@@ -639,7 +658,12 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 
 			return {
 				content: [{ type: "text", text: `started ${agent.name} ${id}` }],
-				details: { protocol: CHILD_START_PROTOCOL, id, depth: lineage.depth },
+				details: {
+					protocol: CHILD_START_PROTOCOL,
+					status: "available",
+					id,
+					depth: lineage.depth,
+				},
 			};
 		},
 	});
@@ -661,13 +685,18 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 							: `${compactStatus(run)}\n${run.output ?? run.error ?? ""}`;
 					return { content: [{ type: "text", text: truncateUtf8(result) }], details: {} };
 				}
-				const recent = [...runs.values()]
-					.filter((run) => ownsDirectChild(childLineage, run))
-					.sort((a, b) => b.startedAt - a.startedAt)
-					.slice(0, MAX_RECENT_RUNS);
+				const directRuns = [...runs.values()].filter((run) => ownsDirectChild(childLineage, run));
+				const recent = directRuns.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RECENT_RUNS);
+				const capacity = await concurrency.capacity();
+				const active = directRuns.filter((run) => run.status === "running").length;
+				const summary = [
+					`runs: active ${active}, total ${directRuns.length}`,
+					`global concurrency: ${capacity.active}/${capacity.limit}`,
+					recent.length ? recent.map(compactStatus).join("\n") : "0 runs",
+				].join("\n");
 				return {
-					content: [{ type: "text", text: recent.length ? recent.map(compactStatus).join("\n") : "0 runs" }],
-					details: {},
+					content: [{ type: "text", text: summary }],
+					details: { capacity, active, total: directRuns.length } as Record<string, unknown>,
 				};
 			}
 

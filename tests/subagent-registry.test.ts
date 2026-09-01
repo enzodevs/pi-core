@@ -64,6 +64,20 @@ describe("global subagent concurrency registry", () => {
 		await lease.release();
 	});
 
+	it("reports live global capacity and restores it after release", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-core-registry-test-"));
+		roots.push(root);
+		const store = new GlobalConcurrencyRegistry({
+			filePath: path.join(root, "concurrency.json"),
+			limit: 2,
+			isPidAlive: () => true,
+		});
+		const lease = await store.claim("run");
+		await expect(store.capacity()).resolves.toEqual({ active: 1, limit: 2, available: 1 });
+		await lease.release();
+		await expect(store.capacity()).resolves.toEqual({ active: 0, limit: 2, available: 2 });
+	});
+
 	it("fails closed on corrupt shared state", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-core-registry-test-"));
 		roots.push(root);

@@ -1,6 +1,5 @@
 export interface SubagentLimits {
 	maxDepth: number;
-	maxChildrenPerRun: number;
 	globalConcurrency: number;
 	taskBytes: number;
 	handoffBytes: number;
@@ -10,7 +9,6 @@ export interface SubagentLimits {
 
 export const DEFAULT_SUBAGENT_LIMITS: Readonly<SubagentLimits> = {
 	maxDepth: 3,
-	maxChildrenPerRun: 8,
 	globalConcurrency: 6,
 	taskBytes: 8 * 1024,
 	handoffBytes: 12 * 1024,
@@ -25,7 +23,6 @@ const LIMIT_ENV: ReadonlyArray<{
 	max: number;
 }> = [
 	{ key: "maxDepth", env: "PI_CORE_SUBAGENT_MAX_DEPTH", min: 1, max: 8 },
-	{ key: "maxChildrenPerRun", env: "PI_CORE_SUBAGENT_MAX_CHILDREN", min: 1, max: 32 },
 	{ key: "globalConcurrency", env: "PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY", min: 1, max: 32 },
 	{ key: "taskBytes", env: "PI_CORE_SUBAGENT_TASK_BYTES", min: 256, max: 64 * 1024 },
 	{ key: "handoffBytes", env: "PI_CORE_SUBAGENT_HANDOFF_BYTES", min: 1024, max: 50 * 1024 },

@@ -16,6 +16,13 @@ export interface ConcurrencyLease {
 	release(): Promise<void>;
 }
 
+export class GlobalConcurrencyLimitError extends Error {
+	constructor(readonly limit: number) {
+		super(`Global background-agent concurrency limit reached (${limit}).`);
+		this.name = "GlobalConcurrencyLimitError";
+	}
+}
+
 export interface ConcurrencyRegistryOptions {
 	filePath: string;
 	limit: number;
@@ -66,6 +73,19 @@ export class GlobalConcurrencyRegistry {
 		return this.claimInternal(id, true);
 	}
 
+	async capacity(): Promise<{ active: number; limit: number; available: number }> {
+		return this.withLock(async () => {
+			const state = await this.readState();
+			state.leases = state.leases.filter((lease) => this.isPidAlive(lease.pid));
+			await this.writeState(state);
+			return {
+				active: state.leases.length,
+				limit: this.limit,
+				available: Math.max(0, this.limit - state.leases.length),
+			};
+		});
+	}
+
 	private async claimInternal(id: string, adoptOwned: boolean): Promise<ConcurrencyLease> {
 		await this.withLock(async () => {
 			const state = await this.readState();
@@ -76,7 +96,7 @@ export class GlobalConcurrencyRegistry {
 				return;
 			}
 			if (state.leases.length >= this.limit) {
-				throw new Error(`Global background-agent concurrency limit reached (${this.limit}).`);
+				throw new GlobalConcurrencyLimitError(this.limit);
 			}
 			state.leases.push({ id, pid: this.pid, startedAt: this.now() });
 			await this.writeState(state);

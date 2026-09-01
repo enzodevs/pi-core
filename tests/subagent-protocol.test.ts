@@ -54,54 +54,21 @@ describe("subagent lineage and delegation", () => {
 		expect(decodeChildLineage(Buffer.from(JSON.stringify(forged)).toString("base64url"))).toBeNull();
 	});
 
-	it("enforces named permission, self, depth, and child-count decisions", () => {
+	it("enforces named permission, self, and depth decisions without a start-count limit", () => {
 		const known = new Set(["worker", "reviewer", "scout"]);
 		expect(
-			decideDelegation({
-				lineage: first,
-				target: "reviewer",
-				knownAgents: known,
-				childrenStarted: 0,
-				limits: first.limits,
-			}),
+			decideDelegation({ lineage: first, target: "reviewer", knownAgents: known, limits: first.limits }),
 		).toEqual({ allowed: true });
 		expect(
-			decideDelegation({
-				lineage: first,
-				target: "scout",
-				knownAgents: known,
-				childrenStarted: 0,
-				limits: first.limits,
-			}),
-		).toMatchObject({ allowed: false, code: "permission" });
+			decideDelegation({ lineage: first, target: "scout", knownAgents: known, limits: first.limits }),
+		).toMatchObject({ allowed: false, code: "not_permitted" });
 		expect(
-			decideDelegation({
-				lineage: first,
-				target: "worker",
-				knownAgents: known,
-				childrenStarted: 0,
-				limits: first.limits,
-			}),
+			decideDelegation({ lineage: first, target: "worker", knownAgents: known, limits: first.limits }),
 		).toMatchObject({ allowed: false, code: "self" });
-		expect(
-			decideDelegation({
-				lineage: first,
-				target: "reviewer",
-				knownAgents: known,
-				childrenStarted: first.limits.maxChildrenPerRun,
-				limits: first.limits,
-			}),
-		).toMatchObject({ allowed: false, code: "children" });
 		const atDepth = { ...first, depth: first.limits.maxDepth };
 		expect(
-			decideDelegation({
-				lineage: atDepth,
-				target: "reviewer",
-				knownAgents: known,
-				childrenStarted: 0,
-				limits: first.limits,
-			}),
-		).toMatchObject({ allowed: false, code: "depth" });
+			decideDelegation({ lineage: atDepth, target: "reviewer", knownAgents: known, limits: first.limits }),
+		).toMatchObject({ allowed: false, code: "max_depth" });
 	});
 
 	it("allows control only for direct descendants", () => {

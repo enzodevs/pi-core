@@ -167,7 +167,7 @@ children: worker, reviewer
 ---
 ```
 
-Limits default to depth 3, eight children per parent run, six globally concurrent children, 8 KiB tasks, 12 KiB handoffs, 1 KiB questions, and 2 KiB replies. Configure them before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_MAX_CHILDREN`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
+Subagent starts are unlimited. Safety limits default to depth 3, six globally concurrent children, 8 KiB tasks, 12 KiB handoffs, 1 KiB questions, and 2 KiB replies. Aggregate `agent_control status` reports temporary global concurrency. Configure limits before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
 
 A settled TUI child seals its final handoff, shows a short completion notice, and exits automatically after a brief grace period. Closing a pane early fails that run; stopping it requests an abort and then force-closes an unresponsive pane. Parent branch changes and normal shutdown cancel owned children. `/reload` is different: live tmux children are detached from the retiring extension instance and reattached by the new one using their durable lineage, pane, session, and sidecar metadata. RPC children cannot be reattached and are terminalized safely on reload.
 
@@ -276,6 +276,14 @@ State persists at:
 ```text
 ~/.pi/agent/pi-core/fast-mode.json
 ```
+
+Benchmark priority versus default processing with randomized, balanced runs:
+
+```bash
+npm run benchmark:fast -- --model gpt-5.3-codex --runs 10
+```
+
+The benchmark keeps one `pi --mode rpc` process—and its OpenAI Codex websocket—alive for the full run. It performs one excluded warmup, cycles three short prompts by default in fresh logical sessions, reports median and p95 time to first text and `agent_end`, saves raw events and summaries as JSON, and restores the original Fast mode JSON. Repeat `--prompt "..."` to supply custom prompts. Do not change `/fast` or run another benchmark concurrently; the setting is shared by all Pi processes.
 
 ## Context hygiene
 
