@@ -29,6 +29,7 @@ import {
 	runAgent,
 } from "./runner.ts";
 import { createTmuxChildBridge } from "./tui-bridge.ts";
+import { prepareWorkspace, type WorkspaceMode, type WorktreeWorkspace } from "./worktrunk.ts";
 
 const MAX_RECENT_RUNS = 20;
 const ENTRY_TYPE = "pi-core-agent-run";
@@ -46,6 +47,13 @@ const BackgroundAgentParams = Type.Object({
 	agent: Type.String({ maxLength: 64, description: "Named agent profile" }),
 	task: Type.String({ maxLength: limits.taskBytes, description: "Independent task" }),
 	cwd: Type.Optional(Type.String({ maxLength: 4096, description: "Child CWD; default: parent CWD" })),
+	workspace: Type.Optional(
+		Type.Unsafe<WorkspaceMode>({
+			type: "string",
+			enum: ["inherit", "worktree"],
+			description: "Workspace isolation; defaults to the agent profile policy",
+		}),
+	),
 	model: Type.Optional(Type.String({ maxLength: 256, description: "Optional provider/model override" })),
 	thinking: Type.Optional(
 		Type.Unsafe<(typeof THINKING_LEVELS)[number]>({ type: "string", enum: THINKING_LEVELS }),
@@ -75,6 +83,9 @@ export interface ManagedRun {
 	agent: string;
 	task: string;
 	cwd: string;
+	workspace?: WorkspaceMode;
+	worktreeBranch?: string;
+	worktreeCreated?: boolean;
 	status: RunStatus;
 	activity: "starting" | "running" | "waiting";
 	delivery: DeliveryStatus;
@@ -140,6 +151,9 @@ export function snapshotRun(run: ManagedRun, transition = false): PersistedRun {
 		agent: run.agent,
 		task: truncateUtf8(run.task, limits.taskBytes),
 		cwd: run.cwd,
+		workspace: run.workspace,
+		worktreeBranch: run.worktreeBranch,
+		worktreeCreated: run.worktreeCreated,
 		status: run.status,
 		activity: run.activity,
 		delivery: run.delivery,
@@ -308,7 +322,17 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 					customType: COMPLETION_MESSAGE_TYPE,
 					content: completionText(run),
 					display: true,
-					details: { protocol: COMPLETION_PROTOCOL, id: run.id, agent: run.agent },
+					details: {
+						protocol: COMPLETION_PROTOCOL,
+						id: run.id,
+						agent: run.agent,
+						workspace: {
+							mode: run.workspace ?? "inherit",
+							cwd: run.cwd,
+							branch: run.worktreeBranch,
+							created: run.worktreeCreated ?? false,
+						},
+					},
 				},
 				{ deliverAs: "followUp", triggerTurn: true },
 			);
@@ -572,7 +596,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		name: "background_agent",
 		label: "Background Agent",
 		description:
-			"Start substantial independent work in an isolated child. Returns an ID and pushes completion or one blocking question automatically. Starts are unlimited; global concurrency and delegation depth remain bounded. Do not poll; use agent_control status for capacity.",
+			"Start substantial independent work in an isolated child. Writing profiles use Worktrunk worktrees by policy unless workspace=inherit; read-only profiles inherit the CWD. Returns an ID and pushes completion or one blocking question automatically. Starts are unlimited; global concurrency and delegation depth remain bounded.",
 		promptGuidelines: [
 			"Use background_agent only for substantial independent work where isolation or parallelism materially helps; never poll for completion.",
 		],
@@ -595,9 +619,9 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			}
 			const agent = agents.find((candidate) => candidate.name === params.agent) as AgentConfig;
 
-			const cwd = path.resolve(ctx.cwd, params.cwd ?? ctx.cwd);
-			if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory())
-				throw new Error(`Invalid child CWD: ${cwd}`);
+			const requestedCwd = path.resolve(ctx.cwd, params.cwd ?? ctx.cwd);
+			if (!fs.existsSync(requestedCwd) || !fs.statSync(requestedCwd).isDirectory())
+				throw new Error(`Invalid child CWD: ${requestedCwd}`);
 			const requestedModel = params.model ? assertBoundedText(params.model, "model", 512) : undefined;
 			const model = resolveRequestedModel(requestedModel, ctx.modelRegistry.getAvailable());
 
@@ -632,11 +656,27 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 					},
 				};
 			}
+			const workspaceMode = params.workspace ?? agent.workspace ?? "inherit";
+			let workspace: WorktreeWorkspace;
+			try {
+				workspace = await prepareWorkspace({
+					mode: workspaceMode,
+					cwd: requestedCwd,
+					agent: agent.name,
+					id,
+				});
+			} catch (error) {
+				await lease.release();
+				throw error;
+			}
 			const run: ManagedRun = {
 				id,
 				agent: agent.name,
 				task,
-				cwd,
+				cwd: workspace.cwd,
+				workspace: workspace.mode,
+				worktreeBranch: workspace.branch,
+				worktreeCreated: workspace.created,
 				status: "running",
 				activity: "starting",
 				delivery: "none",
@@ -663,6 +703,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 					status: "available",
 					id,
 					depth: lineage.depth,
+					workspace,
 				},
 			};
 		},

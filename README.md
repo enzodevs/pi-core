@@ -144,7 +144,7 @@ Compression is deterministic and model-free. It never changes files, tool execut
 
 ## Background subagents
 
-`background_agent` returns a short run ID immediately, leaving the parent free to continue. When the parent is inside a valid tmux pane, Pi Core opens a detached split containing the **actual interactive Pi TUI child**. Focus it with normal tmux navigation to observe, scroll, or interact with the child directly. Nested agents use the same backend selection, so an allowed child delegation opens another real pane. Outside tmux, or when pane launch fails before work starts, Pi Core preserves the isolated RPC backend.
+`background_agent` returns a short run ID immediately, leaving the parent free to continue. Writing profiles can declare `workspace: worktree`; Pi Core then provisions clean linked worktrees exclusively through [Worktrunk](https://worktrunk.dev/) and launches the child there. Install `wt` separately and keep it on `PATH` (for example, `cargo install worktrunk`). When the parent is inside a valid tmux pane, Pi Core opens a detached split containing the **actual interactive Pi TUI child**. Focus it with normal tmux navigation to observe, scroll, or interact with the child directly. Nested agents use the same backend selection, so an allowed child delegation opens another real pane. Outside tmux, or when pane launch fails before work starts, Pi Core preserves the isolated RPC backend.
 
 Every child gets a persistent Pi session named `agent:<profile>:<run-id>`. Its session header links to the direct parent session, and a non-context custom entry records validated lineage. The child starts with extension discovery disabled, the Pi Core subagent extension loaded by absolute path, skills and prompt templates disabled, and an explicit tool allowlist. Profile tools remain restrictive; Pi Core adds only `ask_parent` and, when the pinned child policy permits nesting, `background_agent` plus `agent_control`.
 
@@ -164,8 +164,11 @@ name: coordinator
 description: Coordinates implementation and review
 tools: read, bash
 children: worker, reviewer
+workspace: worktree
 ---
 ```
+
+The bundled `worker` defaults to `workspace: worktree`; read-only profiles inherit their requested CWD. A caller may explicitly set `workspace: inherit` for a task that must see uncommitted parent state. Clean linked worktrees are reused, while a clean primary checkout receives a unique `pi-agent/<profile>-<run-id>` branch through `wt switch`. Dirty checkouts fail with recovery guidance rather than sharing mutable state or silently omitting uncommitted work. Top-level `vendor`, `node_modules`, and `.venv` paths that resolve outside a linked worktree are rejected. Dependency installation belongs in a blocking Worktrunk `pre-start` hook; asynchronous hooks can race the child launch. Pi Core retains created worktrees for review and integration instead of deleting evidence automatically.
 
 Subagent starts are unlimited. Safety limits default to depth 3, six globally concurrent children, 8 KiB tasks, 12 KiB handoffs, 1 KiB questions, and 2 KiB replies. Aggregate `agent_control status` reports temporary global concurrency. Configure limits before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
 

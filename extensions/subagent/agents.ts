@@ -14,6 +14,7 @@ export interface AgentConfig {
 	tools?: string[];
 	children?: string[];
 	model?: string;
+	workspace?: "inherit" | "worktree";
 	systemPrompt: string;
 	source: "bundled" | "user" | "project";
 	filePath: string;
@@ -38,6 +39,7 @@ type AgentFrontmatter = {
 	tools?: unknown;
 	children?: unknown;
 	model?: unknown;
+	workspace?: unknown;
 };
 
 /**
@@ -97,12 +99,17 @@ function loadAgentsFromDir(dir: string, source: AgentConfig["source"]): AgentCon
 
 		if (typeof frontmatter.name !== "string" || typeof frontmatter.description !== "string") continue;
 
+		const workspace =
+			frontmatter.workspace === "worktree" || frontmatter.workspace === "inherit"
+				? frontmatter.workspace
+				: undefined;
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description,
 			tools: parseNameList(frontmatter.tools),
 			children: parseNameList(frontmatter.children),
 			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+			workspace,
 			systemPrompt: body,
 			source,
 			filePath,

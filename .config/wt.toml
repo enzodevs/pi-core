@@ -1,0 +1,4 @@
+# Worktree-local dependencies prevent generated paths and package state from
+# leaking between concurrent agent worktrees. pre-start is intentionally
+# blocking so a worker cannot race installation.
+pre-start = "make install"
