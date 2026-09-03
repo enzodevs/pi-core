@@ -3,10 +3,18 @@ import type { Skill } from "@earendil-works/pi-coding-agent";
 export const SKILL_MODES = ["full", "name", "searchable", "off"] as const;
 export type SkillMode = (typeof SKILL_MODES)[number];
 
+export type SkillModeSource = "project" | "global" | "default";
+
+export interface SkillModeResolution {
+	mode: SkillMode;
+	source: SkillModeSource;
+}
+
 export interface SkillManagerConfig {
-	version: 1;
+	version: 2;
 	defaultMode: SkillMode;
-	profiles: Record<string, { skills: Record<string, SkillMode> }>;
+	globalSkills: Record<string, SkillMode>;
+	projects: Record<string, { skills: Record<string, SkillMode> }>;
 }
 
 export interface IndexedSkill {

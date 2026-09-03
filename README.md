@@ -89,7 +89,7 @@ Pi Core stores mutable state under `~/.pi/agent/pi-core/`. It never modifies dis
 
 ## Skill visibility
 
-Pi Core controls how much information each skill contributes to the model context for each exact working directory.
+Pi Core controls how much information each skill contributes to model context. Settings layer from the global default, through global per-skill overrides, to project overrides. Git repositories use a stable project root (linked worktrees share the main checkout); outside Git, the exact working directory is used.
 
 | Mode | Always-visible context | Searchable | Loadable |
 | --- | --- | :---: | :---: |
@@ -104,11 +104,16 @@ Open the interactive manager:
 /skill-manager
 ```
 
-Or update one skill directly:
+Or update one skill directly. Project scope is the default; `inherit` removes an override:
 
 ```text
 /skill-manager evidence-first-code-review searchable
+/skill-manager evidence-first-code-review inherit
+/skill-manager --global brave-ui-qa off
+/skill-manager --global brave-ui-qa inherit
 ```
+
+`/skill-manager` opens at project scope and `/skill-manager --global` opens at global scope. Inside either view, Tab or Shift+Tab switches between the project and global tabs. Use Up/Down to navigate skills, Left/Right or Enter/Space to change modes, Home/End or Page Up/Page Down to jump, and Escape to close. The manager shows whether each effective value comes from the project, a global override, or the default, and adapts its detail and row count to the terminal size.
 
 The model receives two compact tools for enabled skills:
 
