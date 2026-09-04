@@ -8,6 +8,7 @@ import {
 	ownsProcess,
 	processCompletionText,
 	snapshotProcess,
+	waitForProcess,
 } from "../extensions/background-process/index.js";
 import { PROCESS_LOG_RESULT_BYTES, ProcessLogStore } from "../extensions/background-process/log-store.js";
 import { boundedProcessTail, runBackgroundProcess } from "../extensions/background-process/process.js";
@@ -79,6 +80,25 @@ describe("background process", () => {
 		expect(ownsProcess(runs, process, 3)).toBe(false);
 		runs.clear();
 		expect(ownsProcess(runs, process, 2)).toBe(false);
+	});
+
+	it("waits on process events instead of polling", async () => {
+		const process = runningRun();
+		const waiting = waitForProcess(process, 1);
+		expect(process.waiters?.size).toBe(1);
+
+		process.status = "complete";
+		for (const notify of [...(process.waiters ?? [])]) notify();
+
+		await expect(waiting).resolves.toBe(true);
+		expect(process.waiters?.size).toBe(0);
+	});
+
+	it("bounds a process wait without stopping the process", async () => {
+		const process = runningRun();
+		await expect(waitForProcess(process, 0.01)).resolves.toBe(false);
+		expect(process.status).toBe("running");
+		expect(process.waiters?.size).toBe(0);
 	});
 
 	it("captures combined output and finite exit status", async () => {

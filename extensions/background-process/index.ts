@@ -22,6 +22,8 @@ const MAX_PUSH_BYTES = 4 * 1024;
 const MAX_STATUS_BYTES = 12 * 1024;
 const MAX_RECENT_RUNS = 20;
 const MAX_CONCURRENT_RUNS = 8;
+const DEFAULT_WAIT_SECONDS = 300;
+const MAX_WAIT_SECONDS = 3_600;
 
 type DeliveryStatus = "none" | "pending" | "delivered";
 
@@ -42,18 +44,21 @@ export interface BackgroundProcessRun {
 	log?: ProcessLog;
 	handle?: ProcessHandle;
 	deliveryQueued?: boolean;
+	waiters?: Set<() => void>;
 	generation: number;
 }
 
 export interface PersistedBackgroundProcessRun
-	extends Partial<Omit<BackgroundProcessRun, "log" | "handle" | "deliveryQueued" | "generation">> {
+	extends Partial<
+		Omit<BackgroundProcessRun, "log" | "handle" | "deliveryQueued" | "waiters" | "generation">
+	> {
 	id: string;
 }
 
 const BackgroundProcessParams = Type.Object({
 	command: Type.String({ maxLength: MAX_COMMAND_BYTES, description: "Shell command to run asynchronously" }),
 	mode: Type.Union([Type.Literal("wait"), Type.Literal("service")], {
-		description: "wait expects a terminal result; service is expected to remain running",
+		description: "wait is a finite job; service is expected to remain running",
 	}),
 	cwd: Type.Optional(
 		Type.String({ maxLength: 4096, description: "Working directory; defaults to the parent CWD" }),
@@ -68,7 +73,12 @@ const BackgroundProcessParams = Type.Object({
 });
 
 const ProcessControlParams = Type.Object({
-	action: Type.Union([Type.Literal("status"), Type.Literal("search"), Type.Literal("stop")]),
+	action: Type.Union([
+		Type.Literal("status"),
+		Type.Literal("wait"),
+		Type.Literal("search"),
+		Type.Literal("stop"),
+	]),
 	id: Type.Optional(
 		Type.String({ minLength: 8, maxLength: 8, pattern: "^[a-f0-9]{8}$", description: "Process ID" }),
 	),
@@ -80,6 +90,13 @@ const ProcessControlParams = Type.Object({
 		}),
 	),
 	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 30, description: "Maximum matching log lines" })),
+	timeoutSeconds: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: MAX_WAIT_SECONDS,
+			description: `Maximum wait time; defaults to ${DEFAULT_WAIT_SECONDS} seconds`,
+		}),
+	),
 });
 
 function newId(): string {
@@ -115,6 +132,45 @@ export function detailedProcessStatus(run: BackgroundProcessRun, includeTail = t
 	const header = `${compactProcessStatus(run)}\ncwd: ${run.cwd}\ncommand: ${commandSummary(run.command)}`;
 	const tail = includeTail ? run.log?.tail(MAX_PUSH_BYTES) : "";
 	return tail ? `${header}\n\nrecent log:\n${tail}` : header;
+}
+
+export async function waitForProcess(
+	run: BackgroundProcessRun,
+	timeoutSeconds = DEFAULT_WAIT_SECONDS,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	if (run.status !== "running") return true;
+	if (signal?.aborted) throw new Error("Process wait aborted");
+
+	return new Promise<boolean>((resolve, reject) => {
+		let settled = false;
+		if (!run.waiters) run.waiters = new Set();
+		const waiters = run.waiters;
+		const cleanup = () => {
+			waiters.delete(complete);
+			clearTimeout(timeout);
+			signal?.removeEventListener("abort", abort);
+		};
+		const settle = (value: boolean) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolve(value);
+		};
+		const complete = () => settle(true);
+		const abort = () => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(new Error("Process wait aborted"));
+		};
+		const timeout = setTimeout(() => settle(false), timeoutSeconds * 1_000);
+		waiters.add(complete);
+		signal?.addEventListener("abort", abort, { once: true });
+
+		// Close the gap between the initial status check and listener registration.
+		if (run.status !== "running") complete();
+	});
 }
 
 export function ownsProcess(
@@ -246,11 +302,13 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 		run.logBytes = result.logBytes;
 		run.finishedAt = Date.now();
 		run.handle = undefined;
-		run.delivery = "pending";
+		const waited = Boolean(run.waiters?.size);
+		run.delivery = waited ? "delivered" : "pending";
 		run.deliveryQueued = false;
 		persist(run);
 		updateStatus();
-		deliver(run);
+		for (const notify of [...(run.waiters ?? [])]) notify();
+		if (!waited) deliver(run);
 		prune();
 	};
 	const fail = (run: BackgroundProcessRun, error: unknown) =>
@@ -399,9 +457,10 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "process_control",
 		label: "Process Control",
-		description: "Inspect, search bounded logs for, or stop a session-owned background process.",
+		description:
+			"Inspect, await, search bounded logs for, or stop a session-owned background process. Use action=wait when work depends on completion; never use shell sleep or polling loops.",
 		parameters: ProcessControlParams,
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, signal) {
 			if (params.action === "status") {
 				if (params.id) {
 					const run = runs.get(params.id);
@@ -427,6 +486,25 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 			if (!params.id) throw new Error(`action=${params.action} requires id`);
 			const run = runs.get(params.id);
 			if (!run) throw new Error(`Unknown process: ${params.id}`);
+			if (params.action === "wait") {
+				const timeoutSeconds = params.timeoutSeconds ?? DEFAULT_WAIT_SECONDS;
+				const completed = await waitForProcess(run, timeoutSeconds, signal);
+				if (!completed) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `wait timed out after ${timeoutSeconds}s; ${compactProcessStatus(run)}`,
+							},
+						],
+						details: { id: run.id, status: run.status, timedOut: true } as Record<string, unknown>,
+					};
+				}
+				return {
+					content: [{ type: "text", text: processCompletionText(run) }],
+					details: { id: run.id, status: run.status, timedOut: false } as Record<string, unknown>,
+				};
+			}
 			if (params.action === "search") {
 				if (!params.query) throw new Error("action=search requires query");
 				const result = run.log?.search(params.query, params.limit);
