@@ -6,6 +6,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
 import { AskParentTurnGate, currentAssistantMessage } from "./ask-parent-gate.ts";
+import { buildAgentCatalog } from "./catalog.ts";
 import { assertBoundedText, resolveSubagentLimits, truncateUtf8 as truncateToLimit } from "./limits.ts";
 import {
 	ASK_PARENT_PROTOCOL,
@@ -67,11 +68,18 @@ const BackgroundAgentParams = Type.Object({
 
 const AgentControlParams = Type.Object({
 	action: Type.Union([
+		Type.Literal("catalog"),
 		Type.Literal("status"),
 		Type.Literal("message"),
 		Type.Literal("reply"),
 		Type.Literal("stop"),
 	]),
+	query: Type.Optional(
+		Type.String({
+			maxLength: 256,
+			description: "Catalog model search; omit to list. Narrow if omitted results remain.",
+		}),
+	),
 	id: Type.Optional(Type.String({ maxLength: 32, description: "Direct child run ID" })),
 	message: Type.Optional(Type.String({ maxLength: limits.replyBytes, description: "Message or reply" })),
 });
@@ -752,9 +760,17 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "agent_control",
 		label: "Agent Control",
-		description: "Status, steer, reply to a pending question, or stop a direct child.",
+		description:
+			"Discover agent profiles and available provider/model IDs with catalog, or status, steer, reply to, or stop a direct child.",
 		parameters: AgentControlParams,
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, _signal, _update, ctx) {
+			if (params.action === "catalog") {
+				const profiles = discoverAgents(ctx.cwd, "user").agents.filter(
+					(agent) => !childLineage || childLineage.allowedChildren.includes(agent.name),
+				);
+				const catalog = buildAgentCatalog(profiles, ctx.modelRegistry.getAvailable(), params.query);
+				return { content: [{ type: "text", text: JSON.stringify(catalog) }], details: {} };
+			}
 			if (params.action === "status") {
 				if (params.id) {
 					const run = runs.get(params.id);
