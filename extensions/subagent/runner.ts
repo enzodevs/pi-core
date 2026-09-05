@@ -67,11 +67,12 @@ export class RunnerDetachedError extends Error {
 	}
 }
 
-export function parentReplyCommand(text: string, idle: boolean): Record<string, unknown> {
+export function parentPromptCommand(text: string): Record<string, unknown> {
+	// Let the child's SDK decide whether to start or steer; lifecycle events can already be stale.
 	return {
 		type: "prompt",
-		message: `Parent reply: ${text}\n\nContinue the assigned task using this answer.`,
-		...(idle ? {} : { streamingBehavior: "steer" }),
+		message: text,
+		streamingBehavior: "steer",
 	};
 }
 
@@ -196,7 +197,6 @@ class RpcRunner {
 				let buffer = "";
 				let settled = false;
 				let aborted = false;
-				let idle = false;
 				let forceKill: NodeJS.Timeout | undefined;
 
 				const finish = (error?: Error, output?: string) => {
@@ -234,7 +234,6 @@ class RpcRunner {
 						} else if (event.type === "nested_started") {
 							options.onStatus("waiting for delegated work");
 						} else if (event.type === "settled") {
-							idle = true;
 							if (event.waiting) return;
 							if (event.error) finish(new Error(event.error));
 							else finish(aborted ? new Error("stopped") : undefined, event.output);
@@ -259,13 +258,14 @@ class RpcRunner {
 						forceKill.unref();
 					},
 					message(text: string) {
-						writeRpc(child, idle ? { type: "prompt", message: text } : { type: "steer", message: text });
-						idle = false;
+						writeRpc(child, parentPromptCommand(text));
 					},
 					reply(questionId: string, text: string) {
-						writeRpc(child, parentReplyCommand(text, idle));
+						writeRpc(
+							child,
+							parentPromptCommand(`Parent reply: ${text}\n\nContinue the assigned task using this answer.`),
+						);
 						tracker.acceptReply(questionId);
-						idle = false;
 						options.onStatus("running");
 					},
 					detach() {

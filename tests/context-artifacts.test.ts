@@ -26,6 +26,116 @@ afterEach(() => {
 });
 
 describe("context artifact store", () => {
+	it("recovers contiguous lines in one call with explicit continuation", () => {
+		const store = new ArtifactStore({ root: root() });
+		const artifact = store.store({
+			toolCallId: "range",
+			toolName: "read",
+			sessionId: "s1",
+			content: Array.from({ length: 300 }, (_, index) => `source ${index + 1}`).join("\n"),
+		});
+		const id = artifact?.metadata.id ?? "";
+		const result = store.readRange(id, "s1", 40, 60);
+		expect(result?.text).toContain("40:source 40\n41:source 41");
+		expect(result?.text).toContain("99:source 99");
+		expect(result?.text).toContain("next offset=100");
+		expect(store.readRange(id, "s1", 295, 20)?.text).toContain("end of stored output");
+		expect(store.readRange(id, "s1", 301)?.matches).toBe(0);
+		expect(store.readRange(id, "other", 1)).toBeUndefined();
+		expect(Buffer.byteLength(result?.text ?? "")).toBeLessThanOrEqual(LOOKUP_MAX_BYTES);
+	});
+
+	it("bounds the number of retained small artifacts", () => {
+		let now = 100;
+		const store = new ArtifactStore({ root: root(), maxArtifacts: 2, now: () => now++ });
+		const ids = Array.from(
+			{ length: 3 },
+			(_, index) =>
+				store.store({
+					toolCallId: `small-${index}`,
+					toolName: "read",
+					sessionId: "s1",
+					content: "x".repeat(1300),
+				})?.metadata.id ?? "",
+		);
+		expect(store.get(ids[0] ?? "", "s1")).toBeUndefined();
+		expect(store.get(ids[1] ?? "", "s1")).toBeDefined();
+		expect(store.get(ids[2] ?? "", "s1")).toBeDefined();
+	});
+
+	it("returns supporting evidence around a search hit without a follow-up range read", () => {
+		const store = new ArtifactStore({ root: root() });
+		const lines = Array.from({ length: 200 }, (_, index) => `context line ${index}`);
+		lines[100] = "unique_identifier";
+		lines[105] = "required supporting evidence";
+		const artifact = store.store({
+			toolCallId: "window",
+			toolName: "read",
+			sessionId: "s1",
+			content: lines.join("\n"),
+		});
+		const result = store.search(artifact?.metadata.id ?? "", "s1", "unique_identifier", 1);
+		expect(result?.text).toContain("101:unique_identifier");
+		expect(result?.text).toContain("106:required supporting evidence");
+		expect(result?.matches).toBe(1);
+		expect(Buffer.byteLength(result?.text ?? "")).toBeLessThanOrEqual(LOOKUP_MAX_BYTES);
+	});
+
+	it("validates retrieval bounds without reading an artifact", () => {
+		const store = new ArtifactStore({ root: root() });
+		for (const offset of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+			expect(() => store.readRange("0123456789abcdef", "s1", offset)).toThrow();
+		}
+		for (const limit of [0, 81, 1.5, Number.NaN]) {
+			expect(() => store.readRange("0123456789abcdef", "s1", 1, limit)).toThrow();
+			expect(() => store.search("0123456789abcdef", "s1", "word", limit)).toThrow();
+		}
+	});
+
+	it("discloses incomplete storage even when no search matches exist", () => {
+		const store = new ArtifactStore({ root: root(), maxArtifactBytes: 1300 });
+		const artifact = store.store({
+			toolCallId: "truncated",
+			toolName: "bash",
+			sessionId: "s1",
+			content: `${"noise\n".repeat(500)}missingneedle`,
+		});
+		const id = artifact?.metadata.id ?? "";
+		const result = store.search(id, "s1", "missingneedle");
+		expect(result?.matches).toBe(0);
+		expect(result?.text).toContain("stored prefix is truncated");
+		expect(store.readRange(id, "s1", 1)?.text).toContain("stored prefix truncated");
+	});
+
+	it("keeps the highest-ranked hit under byte pressure and reports total matches", () => {
+		const store = new ArtifactStore({ root: root() });
+		const content = [
+			...Array.from({ length: 60 }, () => `alpha ${"x".repeat(500)}`),
+			"alpha beta strongest evidence",
+		].join("\n");
+		const artifact = store.store({ toolCallId: "rank", toolName: "bash", sessionId: "s1", content });
+		const result = store.search(artifact?.metadata.id ?? "", "s1", "alpha beta", 80);
+		expect(result?.matches).toBe(61);
+		expect(result?.text).toContain("alpha beta strongest evidence");
+		expect(result?.text).toContain("showing");
+		expect(Buffer.byteLength(result?.text ?? "")).toBeLessThanOrEqual(LOOKUP_MAX_BYTES);
+	});
+
+	it("labels oversized range lines rather than silently splitting them", () => {
+		const store = new ArtifactStore({ root: root() });
+		const artifact = store.store({
+			toolCallId: "long",
+			toolName: "bash",
+			sessionId: "s1",
+			content: `${"界".repeat(3000)}\nnext`,
+		});
+		const result = store.readRange(artifact?.metadata.id ?? "", "s1", 1);
+		expect(result?.text).toContain("line truncated");
+		expect(result?.text).toContain("next offset=2");
+		expect(result?.text).not.toContain("�");
+		expect(Buffer.byteLength(result?.text ?? "")).toBeLessThanOrEqual(LOOKUP_MAX_BYTES);
+	});
+
 	it("ignores small ordinary results and privately stores oversized output", () => {
 		const directory = root();
 		const store = new ArtifactStore({ root: directory });
@@ -66,7 +176,8 @@ describe("context artifact store", () => {
 			toolCallId: "call-ranked",
 			toolName: "bash",
 			sessionId: "s1",
-			content: `${"noise\n".repeat(2000)}Grafana dashboards\nunrelated\nOpenTelemetry Collector exports traces\nOpenTelemetry SDK setup`,
+			// Keep the unrelated topic outside the intentionally wider evidence window.
+			content: `${"noise\n".repeat(2000)}Grafana dashboards\n${"unrelated\n".repeat(12)}OpenTelemetry Collector exports traces\nOpenTelemetry SDK setup`,
 		});
 		const result = store.search(artifact?.metadata.id ?? "", "s1", "OpenTelemetry Collector traces", 2);
 

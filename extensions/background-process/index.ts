@@ -19,6 +19,7 @@ const RESULT_TYPE = "pi-core-background-process-result";
 const STATUS_ID = "pi-core-background-processes";
 const MAX_COMMAND_BYTES = 4 * 1024;
 const MAX_PUSH_BYTES = 4 * 1024;
+const MAX_NOTIFICATION_RESULT_BYTES = 512;
 const MAX_STATUS_BYTES = 12 * 1024;
 const MAX_RECENT_RUNS = 20;
 const MAX_CONCURRENT_RUNS = 8;
@@ -139,8 +140,8 @@ export async function waitForProcess(
 	timeoutSeconds = DEFAULT_WAIT_SECONDS,
 	signal?: AbortSignal,
 ): Promise<boolean> {
-	if (run.status !== "running") return true;
 	if (signal?.aborted) throw new Error("Process wait aborted");
+	if (run.status !== "running") return true;
 
 	return new Promise<boolean>((resolve, reject) => {
 		let settled = false;
@@ -234,6 +235,7 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 	let logStore: ProcessLogStore | undefined;
 	let currentCtx: ExtensionContext | undefined;
 	let branchGeneration = 0;
+	let deliveryInFlight = false;
 
 	const updateStatus = () => {
 		if (!currentCtx) return;
@@ -266,33 +268,51 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 	const completionPresent = (run: BackgroundProcessRun) =>
 		currentCtx?.sessionManager.getBranch().some((entry) => {
 			if (entry.type !== "custom_message" || entry.customType !== RESULT_TYPE) return false;
-			return (entry.details as { id?: unknown } | undefined)?.id === run.id;
+			const details = entry.details as { id?: unknown; ids?: unknown } | undefined;
+			return details?.id === run.id || (Array.isArray(details?.ids) && details.ids.includes(run.id));
 		}) ?? false;
-	const acknowledge = (run: BackgroundProcessRun) => {
-		if (!completionPresent(run)) return false;
+	const consume = (run: BackgroundProcessRun) => {
+		if (run.status === "running" || run.delivery === "delivered") return;
 		run.delivery = "delivered";
 		run.deliveryQueued = false;
 		persist(run, true);
+	};
+	const acknowledge = (run: BackgroundProcessRun) => {
+		if (!completionPresent(run)) return false;
+		consume(run);
 		return true;
 	};
-	const deliver = (run: BackgroundProcessRun) => {
-		if (run.status === "running" || run.delivery === "delivered" || run.deliveryQueued) return;
-		if (acknowledge(run)) return;
+	const deliver = () => {
+		// Keep unread results locally until the parent can consume one batch, not a queue of stale turns.
+		if (!currentCtx?.isIdle() || deliveryInFlight) return;
+		const batch: BackgroundProcessRun[] = [];
+		let content =
+			"Unread background process results. No acknowledgement reply is required. Use process_control wait/search for more detail.\n";
+		for (const run of runs.values()) {
+			if (run.status === "running" || run.delivery !== "pending" || run.deliveryQueued || acknowledge(run))
+				continue;
+			const result = `\n${processCompletionText(run, MAX_NOTIFICATION_RESULT_BYTES)}\n`;
+			if (Buffer.byteLength(content + result) > MAX_PUSH_BYTES) break;
+			content += result;
+			batch.push(run);
+		}
+		if (!batch.length) return;
+		deliveryInFlight = true;
+		for (const run of batch) run.deliveryQueued = true;
 		try {
 			pi.sendMessage(
 				{
 					customType: RESULT_TYPE,
-					content: processCompletionText(run),
+					content,
 					display: true,
-					details: { id: run.id },
+					details: { ids: batch.map((run) => run.id) },
 				},
 				{ deliverAs: "followUp", triggerTurn: true },
 			);
-			run.deliveryQueued = true;
 		} catch {
-			run.delivery = "pending";
-			run.deliveryQueued = false;
-			currentCtx?.ui.notify(`Process ${run.id} finished; delivery will retry.`, "warning");
+			deliveryInFlight = false;
+			for (const run of batch) run.deliveryQueued = false;
+			currentCtx.ui.notify("Background results could not be delivered; delivery will retry.", "warning");
 		}
 	};
 	const finish = (run: BackgroundProcessRun, result: ProcessResult) => {
@@ -303,12 +323,12 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 		run.finishedAt = Date.now();
 		run.handle = undefined;
 		const waited = Boolean(run.waiters?.size);
-		run.delivery = waited ? "delivered" : "pending";
+		run.delivery = "pending";
 		run.deliveryQueued = false;
 		persist(run);
 		updateStatus();
 		for (const notify of [...(run.waiters ?? [])]) notify();
-		if (!waited) deliver(run);
+		if (!waited) deliver();
 		prune();
 	};
 	const fail = (run: BackgroundProcessRun, error: unknown) =>
@@ -325,6 +345,7 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 	};
 	const restore = (ctx: ExtensionContext, reason: string) => {
 		branchGeneration++;
+		deliveryInFlight = false;
 		for (const run of runs.values()) run.handle?.stop();
 		runs.clear();
 		for (const entry of ctx.sessionManager.getBranch()) {
@@ -357,8 +378,8 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 				run.delivery = "pending";
 				persist(run);
 			}
-			if (run.delivery === "pending") deliver(run);
 		}
+		deliver();
 		prune();
 		updateStatus();
 	};
@@ -375,12 +396,13 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 		restore(ctx, "Parent changed session branch before process completion.");
 	});
 	pi.on("agent_settled", () => {
+		deliveryInFlight = false;
 		for (const run of runs.values()) {
 			if (run.delivery !== "pending") continue;
 			if (acknowledge(run)) continue;
 			run.deliveryQueued = false;
-			deliver(run);
 		}
+		deliver();
 	});
 	pi.on("session_shutdown", () => {
 		branchGeneration++;
@@ -458,13 +480,14 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 		name: "process_control",
 		label: "Process Control",
 		description:
-			"Inspect, await, search bounded logs for, or stop a session-owned background process. Use action=wait when work depends on completion; never use shell sleep or polling loops.",
+			"Inspect, await, search bounded logs for, or stop a session-owned background process. Terminal wait/status reads consume its completion notification. Use action=wait for dependencies; never use shell sleep or polling loops.",
 		parameters: ProcessControlParams,
 		async execute(_toolCallId, params, signal) {
 			if (params.action === "status") {
 				if (params.id) {
 					const run = runs.get(params.id);
 					if (!run) throw new Error(`Unknown process: ${params.id}`);
+					consume(run);
 					return {
 						content: [
 							{ type: "text", text: truncateProcessText(detailedProcessStatus(run), MAX_STATUS_BYTES) },
@@ -489,6 +512,7 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 			if (params.action === "wait") {
 				const timeoutSeconds = params.timeoutSeconds ?? DEFAULT_WAIT_SECONDS;
 				const completed = await waitForProcess(run, timeoutSeconds, signal);
+				if (signal?.aborted) throw new Error("Process wait aborted");
 				if (!completed) {
 					return {
 						content: [
@@ -500,6 +524,7 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 						details: { id: run.id, status: run.status, timedOut: true } as Record<string, unknown>,
 					};
 				}
+				consume(run);
 				return {
 					content: [{ type: "text", text: processCompletionText(run) }],
 					details: { id: run.id, status: run.status, timedOut: false } as Record<string, unknown>,

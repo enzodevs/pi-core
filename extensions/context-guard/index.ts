@@ -52,27 +52,38 @@ export default function contextGuard(pi: ExtensionAPI): void {
 		name: LOOKUP_TOOL,
 		label: "Context Lookup",
 		description:
-			"Search one indexed oversized tool result. Returns bounded matching lines with line numbers.",
+			"Recover indexed tool output: query ranks matching evidence; offset reads a contiguous range. Returns at most 4 KiB with stored line numbers. Supply exactly one of query or offset.",
 		parameters: Type.Object({
 			artifact: Type.String({
 				minLength: 16,
 				maxLength: 16,
 				description: "Artifact ID from a guarded result",
 			}),
-			query: Type.String({
-				minLength: 2,
-				maxLength: 256,
-				description: "Words or identifiers that must occur",
-			}),
-			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 30, description: "Maximum matching lines" })),
+			query: Type.Optional(
+				Type.String({
+					minLength: 2,
+					maxLength: 256,
+					description: "Words or identifiers, ranked by overlap",
+				}),
+			),
+			offset: Type.Optional(Type.Integer({ minimum: 1, description: "First stored line (1-based)" })),
+			limit: Type.Optional(
+				Type.Integer({
+					minimum: 1,
+					maximum: 80,
+					description: "Maximum hits or range lines; defaults 12 or 40",
+				}),
+			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const result = store?.search(
-				params.artifact,
-				ctx.sessionManager.getSessionId(),
-				params.query,
-				params.limit,
-			);
+			if ((params.query === undefined) === (params.offset === undefined)) {
+				throw new Error("Supply exactly one of query or offset.");
+			}
+			const owner = ctx.sessionManager.getSessionId();
+			const result =
+				params.query !== undefined
+					? store?.search(params.artifact, owner, params.query, params.limit)
+					: store?.readRange(params.artifact, owner, params.offset, params.limit);
 			if (!result) throw new Error(`Unknown context artifact: ${params.artifact}.`);
 			return {
 				content: [{ type: "text", text: result.text }],
@@ -105,7 +116,9 @@ export default function contextGuard(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_result", (event) => {
-		if (!store || artifacts.has(event.toolCallId)) return;
+		// Retrieval already points at durable evidence; do not recursively archive
+		// excerpts and replace the original reference with an artifact of an artifact.
+		if (!store || event.toolName === LOOKUP_TOOL || artifacts.has(event.toolCallId)) return;
 		const content = textContent(event.content);
 		const artifact = store.store({
 			toolCallId: event.toolCallId,

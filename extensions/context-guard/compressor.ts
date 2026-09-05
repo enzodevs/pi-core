@@ -1,5 +1,7 @@
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matches terminal ANSI escape sequences.
 const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+const FAILURE_PATTERN =
+	/(?:\bfail(?:ed|ure|ures)?\b|\berror\b|\bfatal\b|\bpanic\b|\bexception\b|\bassertion(?:error)?\b|\bnot ok\b|^\s*[✖×]|make:\s*\*\*\*)/i;
 const SIGNAL_PATTERN =
 	/(?:\berror\b|\bfailed?\b|\bfailure\b|\bfatal\b|\bpanic\b|\bexception\b|\bwarning\b|\bnot ok\b|\btests?\b.*\b(?:passed|failed)\b|\btest files?\b|\bexit(?:ed)?\s+(?:code\s+)?[1-9]\d*\b|make:\s*\*\*\*|\b(?:passed|failed)\s+\d+\b|\b\w+\.[cm]?[jt]sx?:\d+(?::\d+)?\b)/i;
 const WORD_PATTERN = /[\p{L}\p{N}_.:/-]{3,}/gu;
@@ -112,22 +114,6 @@ function formatBytes(bytes: number): string {
 	return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KiB`;
 }
 
-function cleanLine(line: string): string {
-	return utf8Slice(line.replace(ANSI_PATTERN, "").replace(/[ \t]+$/g, ""), 512);
-}
-
-function uniqueLines(lines: string[]): string[] {
-	const seen = new Set<string>();
-	const result: string[] = [];
-	for (const line of lines) {
-		const cleaned = cleanLine(line);
-		if (!cleaned || seen.has(cleaned)) continue;
-		seen.add(cleaned);
-		result.push(cleaned);
-	}
-	return result;
-}
-
 export function extractQueryTerms(messages: readonly unknown[]): string[] {
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const candidate = messages[index] as Partial<UserLike> | undefined;
@@ -149,34 +135,17 @@ export function extractQueryTerms(messages: readonly unknown[]): string[] {
 	return [];
 }
 
-function relevantLines(lines: string[], terms: readonly string[]): string[] {
-	if (terms.length === 0) return [];
-	const selected: string[] = [];
-	for (let index = 0; index < lines.length && selected.length < 18; index++) {
-		const lower = lines[index]?.toLowerCase() ?? "";
-		if (!terms.some((term) => lower.includes(term))) continue;
-		for (let around = Math.max(0, index - 1); around <= Math.min(lines.length - 1, index + 1); around++) {
-			selected.push(lines[around] ?? "");
-		}
+// Render by source position, not by line value: repeated braces and blank lines
+// carry structure. Overlapping evidence windows must not duplicate that structure.
+function renderLines(selected: ReadonlyMap<number, string>): string {
+	const parts: string[] = [];
+	let previous = -2;
+	for (const [index, line] of [...selected].sort(([a], [b]) => a - b)) {
+		if (index !== previous + 1) parts.push(`[output line ${index + 1}]`);
+		parts.push(line);
+		previous = index;
 	}
-	return uniqueLines(selected);
-}
-
-function diagnosticLines(lines: string[]): string[] {
-	const selected: string[] = [];
-	for (let index = 0; index < lines.length && selected.length < 36; index++) {
-		if (!SIGNAL_PATTERN.test(lines[index] ?? "")) continue;
-		for (let around = Math.max(0, index - 1); around <= Math.min(lines.length - 1, index + 1); around++) {
-			selected.push(lines[around] ?? "");
-		}
-	}
-	return uniqueLines(selected);
-}
-
-function section(title: string, lines: string[], maxBytes: number, tail = false): string {
-	if (lines.length === 0 || maxBytes <= title.length + 4) return "";
-	const body = utf8Slice(lines.join("\n"), Math.max(0, maxBytes - Buffer.byteLength(title) - 2), tail);
-	return body ? `${title}\n${body}` : "";
+	return parts.join("\n");
 }
 
 function receipt(isError: boolean, originalBytes: number, maxBytes: number): string {
@@ -192,46 +161,63 @@ export function compressToolOutput(params: {
 	maxBytes: number;
 	queryTerms?: readonly string[];
 }): string {
+	if (Buffer.byteLength(params.text) <= params.maxBytes) return params.text;
 	const cleaned = params.text.replace(ANSI_PATTERN, "").replace(/\r\n/g, "\n");
 	const originalBytes = Buffer.byteLength(cleaned);
 	if (originalBytes <= params.maxBytes) return cleaned;
 	if (params.maxBytes < 160) return receipt(params.isError, originalBytes, params.maxBytes);
 
 	const lines = cleaned.split("\n");
-	const head = uniqueLines(lines.slice(0, 8));
-	const diagnostics = diagnosticLines(lines);
-	const relevant = relevantLines(lines, params.queryTerms ?? []);
-	const tail = uniqueLines(lines.slice(-16));
-	const marker = `[context-guard kept strategic slices from ${formatBytes(originalBytes)}; omitted ${formatBytes(
-		Math.max(0, originalBytes - params.maxBytes),
-	)}]`;
-	const markerBytes = Buffer.byteLength(marker) + 2;
-	const available = Math.max(0, params.maxBytes - markerBytes);
-	const candidates = [
-		{ title: "[start]", lines: head, weight: 1, tail: false },
-		{
-			title: "[diagnostics]",
-			lines: diagnostics,
-			weight: params.toolName === "bash" || params.isError ? 4 : 2,
-			tail: false,
-		},
-		{ title: "[task-relevant]", lines: relevant, weight: 3, tail: false },
-		{ title: "[end]", lines: tail, weight: 2, tail: true },
-	].filter((candidate) => candidate.lines.length > 0);
-	const totalWeight = candidates.reduce((sum, candidate) => sum + candidate.weight, 0);
-	const parts = [
-		...candidates.map((candidate) =>
-			section(
-				candidate.title,
-				candidate.lines,
-				Math.floor((available * candidate.weight) / totalWeight),
-				candidate.tail,
-			),
-		),
-		marker,
-	].filter(Boolean);
-	const projected = parts.join("\n\n");
-	return Buffer.byteLength(projected) <= params.maxBytes ? projected : utf8Slice(projected, params.maxBytes);
+	const marker = `[context-guard excerpt of ${lines.length} output lines (${formatBytes(originalBytes)}); gaps omitted]`;
+	const available = Math.max(0, params.maxBytes - Buffer.byteLength(marker) - 2);
+	const selected = new Map<number, string>();
+	let selectedBytes = 0;
+	const add = (index: number) => {
+		if (index < 0 || index >= lines.length || selected.has(index)) return;
+		let line = lines[index] ?? "";
+		// Adding a line can join two windows. Account for the changed gap labels
+		// without repeatedly sorting and rendering the growing excerpt.
+		const overhead =
+			(selected.size > 0 ? 1 : 0) +
+			(selected.has(index - 1) ? 0 : Buffer.byteLength(`[output line ${index + 1}]\n`)) -
+			(selected.has(index + 1) ? Buffer.byteLength(`[output line ${index + 2}]\n`) : 0);
+		if (selectedBytes + Buffer.byteLength(line) + overhead > available) {
+			// Never silently cut ordinary source lines. Pathological single-line
+			// output may still provide a useful, explicitly labelled preview.
+			if (Buffer.byteLength(line) <= available) return;
+			line = `${utf8Slice(line, Math.min(512, Math.floor(available / 2)))} [line truncated]`;
+		}
+		const nextBytes = selectedBytes + Buffer.byteLength(line) + overhead;
+		if (nextBytes > available) return;
+		selected.set(index, line);
+		selectedBytes = nextBytes;
+	};
+	const failures: number[] = [];
+	const diagnostics: number[] = [];
+	const relevant: number[] = [];
+	const terms = params.queryTerms ?? [];
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index] ?? "";
+		if (params.isError || ["bash", "powershell"].includes(params.toolName)) {
+			if (FAILURE_PATTERN.test(line)) {
+				if (failures.length < 12) failures.push(index);
+			} else if (diagnostics.length < 6 && SIGNAL_PATTERN.test(line)) diagnostics.push(index);
+		}
+		if (relevant.length < 6 && terms.some((term) => line.toLowerCase().includes(term))) relevant.push(index);
+	}
+	// Reserve evidence before surrounding context, then fill whole contiguous
+	// windows. Selection is bounded even for multi-megabyte command output.
+	for (const index of [...failures, ...diagnostics]) add(index);
+	for (const index of relevant) add(index);
+	add(0);
+	for (let index = lines.length - 1; index >= Math.max(0, lines.length - 3); index--) add(index);
+	for (const index of [...failures, ...diagnostics, ...relevant]) {
+		for (let around = index - 2; around <= index + 2; around++) add(around);
+	}
+	for (let index = 1; index < Math.min(lines.length, 16); index++) add(index);
+	for (let index = lines.length - 4; index >= Math.max(0, lines.length - 16); index--) add(index);
+	const body = renderLines(selected);
+	return body ? `${body}\n\n${marker}` : marker;
 }
 
 function isToolResult(message: unknown): message is ToolResultLike {
@@ -255,8 +241,44 @@ export function projectToolContext<T>(
 ): ContextProjection<T> {
 	const queryTerms = extractQueryTerms(messages);
 	const toolIndexes: number[] = [];
+	let lastTurn = -1;
 	for (let index = 0; index < messages.length; index++) {
-		if (isToolResult(messages[index])) toolIndexes.push(index);
+		const message = messages[index];
+		if (isToolResult(message)) toolIndexes.push(index);
+		else if (
+			message &&
+			typeof message === "object" &&
+			"role" in message &&
+			(message.role === "assistant" || message.role === "user")
+		)
+			lastTurn = index;
+	}
+	// All results since the last model/user turn are first delivery, including
+	// large parallel batches. Give small results their full allowance first and
+	// share the rest fairly, rather than starving the earliest completed calls.
+	const pending = toolIndexes
+		.filter((index) => index > lastTurn)
+		.map((index) => {
+			const message = messages[index] as unknown as ToolResultLike;
+			const bytes = message.content.reduce(
+				(sum, block) =>
+					sum + (block.type === "text" && typeof block.text === "string" ? Buffer.byteLength(block.text) : 0),
+				0,
+			);
+			return {
+				index,
+				desired: Math.min(bytes, toolBudget(message.toolName ?? "tool", Boolean(message.isError), config)),
+			};
+		})
+		.sort((a, b) => a.desired - b.desired);
+	const firstDelivery = new Map<number, number>();
+	let available = config.totalToolBytes;
+	for (let position = 0; position < pending.length; position++) {
+		const item = pending[position];
+		if (!item) continue;
+		const allocation = Math.min(item.desired, Math.floor(available / (pending.length - position)));
+		firstDelivery.set(item.index, allocation);
+		available -= allocation;
 	}
 
 	let remaining = config.totalToolBytes;
@@ -274,16 +296,19 @@ export function projectToolContext<T>(
 		const bytes = textBlocks.reduce((sum, block) => sum + Buffer.byteLength(block.text), 0);
 		originalBytes += bytes;
 		const desired =
-			rank < config.recentResults
+			firstDelivery.get(index) ??
+			(pending.length === 0 && rank < config.recentResults
 				? toolBudget(message.toolName ?? "tool", Boolean(message.isError), config)
-				: config.historicalBytes;
+				: config.historicalBytes);
+		const allowance = Math.min(desired, remaining);
 		const artifactId = message.toolCallId ? artifacts.get(message.toolCallId) : undefined;
-		const artifactReceipt = artifactId
-			? `[full output indexed as ${artifactId}; use context_lookup with a focused query]`
-			: undefined;
+		const artifactReceipt =
+			artifactId && bytes > allowance
+				? `[artifact ${artifactId}; context_lookup: query or offset (stored line)]`
+				: undefined;
 		const receiptBytes = artifactReceipt ? Buffer.byteLength(artifactReceipt) : 0;
-		const includeReceipt = receiptBytes <= remaining;
-		const budget = Math.min(desired, Math.max(0, remaining - (includeReceipt ? receiptBytes : 0)));
+		const includeReceipt = receiptBytes <= allowance;
+		const budget = Math.max(0, allowance - (includeReceipt ? receiptBytes : 0));
 		let blockBudgetRemaining = budget;
 		let sourceBytesRemaining = bytes;
 		let changed = false;

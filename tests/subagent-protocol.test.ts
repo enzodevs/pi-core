@@ -20,7 +20,7 @@ import {
 	buildChildArgs,
 	buildChildTools,
 	CONTEXT_GUARD_EXTENSION_PATH,
-	parentReplyCommand,
+	parentPromptCommand,
 	SUBAGENT_EXTENSION_PATH,
 } from "../extensions/subagent/runner.js";
 
@@ -170,12 +170,12 @@ describe("subagent lineage and delegation", () => {
 });
 
 describe("RPC ask/reply and nested waiting protocol", () => {
-	it("uses a steering prompt for an early reply and a direct prompt once idle", () => {
-		expect(parentReplyCommand("Use API A", false)).toMatchObject({
+	it("always lets the SDK start or queue parent prompts, even after an idle event", () => {
+		expect(parentPromptCommand("Use API A")).toEqual({
 			type: "prompt",
+			message: "Use API A",
 			streamingBehavior: "steer",
 		});
-		expect(parentReplyCommand("Use API A", true)).not.toHaveProperty("streamingBehavior");
 	});
 
 	it("parks on ask_parent, accepts the matching reply, and then settles", () => {

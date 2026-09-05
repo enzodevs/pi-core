@@ -4,9 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const ARTIFACT_VERSION = 1;
-export const ARTIFACT_THRESHOLD_BYTES = 8 * 1024;
+// Capture results that can later exceed the historical projection allowance.
+export const ARTIFACT_THRESHOLD_BYTES = 1200;
 const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const MAX_STORE_BYTES = 128 * 1024 * 1024;
+const MAX_ARTIFACTS = 512;
 const ARTIFACT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const METADATA_HEADER_MAX_BYTES = 16 * 1024;
 const STALE_TEMPORARY_MS = 60 * 60 * 1000;
@@ -28,6 +30,7 @@ export interface ArtifactStoreOptions {
 	root: string;
 	maxArtifactBytes?: number;
 	maxStoreBytes?: number;
+	maxArtifacts?: number;
 	ttlMs?: number;
 	now?: () => number;
 }
@@ -179,6 +182,7 @@ export class ArtifactStore {
 	private readonly root: string;
 	private readonly maxArtifactBytes: number;
 	private readonly maxStoreBytes: number;
+	private readonly maxArtifacts: number;
 	private readonly ttlMs: number;
 	private readonly now: () => number;
 
@@ -186,6 +190,7 @@ export class ArtifactStore {
 		this.root = options.root;
 		this.maxArtifactBytes = options.maxArtifactBytes ?? MAX_ARTIFACT_BYTES;
 		this.maxStoreBytes = options.maxStoreBytes ?? MAX_STORE_BYTES;
+		this.maxArtifacts = options.maxArtifacts ?? MAX_ARTIFACTS;
 		this.ttlMs = options.ttlMs ?? ARTIFACT_TTL_MS;
 		this.now = options.now ?? Date.now;
 		fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
@@ -255,7 +260,50 @@ export class ArtifactStore {
 		return { metadata: artifact.metadata, path: file };
 	}
 
+	readRange(id: string, sessionId: string, offset = 1, limit = 40): ArtifactSearchResult | undefined {
+		if (!Number.isSafeInteger(offset) || offset < 1) throw new Error("Offset must be a positive integer.");
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 80)
+			throw new Error("Limit must be between 1 and 80.");
+		const artifact = this.get(id, sessionId);
+		if (!artifact) return undefined;
+		const stored = readArtifact(artifact.path, true);
+		if (!stored || stored.metadata.sessionId !== sessionId) return undefined;
+		const lines = (stored.content ?? "").split("\n");
+		const selected: string[] = [];
+		let bytes = 0;
+		let index = offset - 1;
+		let clipped = false;
+		// Leave a fixed allowance for bounded metadata, never cut the final result
+		// mid-line without telling the caller.
+		const budget = LOOKUP_MAX_BYTES - 256;
+		for (; index < lines.length && selected.length < limit; index++) {
+			const line = `${index + 1}:${lines[index] ?? ""}`;
+			const size = Buffer.byteLength(line) + 1;
+			if (bytes + size > budget) {
+				if (selected.length === 0) {
+					selected.push(`${utf8Head(line, budget - 32)} [line truncated]`);
+					clipped = true;
+					index++;
+				}
+				break;
+			}
+			selected.push(line);
+			bytes += size;
+		}
+		const status = artifact.metadata.truncated ? "; stored prefix truncated" : "; complete stored output";
+		const next = index < lines.length ? `; next offset=${index + 1}` : "; end of stored output";
+		const clip = clipped ? "; use query to search within the clipped line" : "";
+		return {
+			artifact: artifact.metadata,
+			matches: selected.length,
+			text: `${id}: ${selected.length} lines from ${offset} of ${lines.length}${status}${next}${clip}\n${selected.join("\n")}`,
+		};
+	}
+
 	search(id: string, sessionId: string, query: string, limit = 12): ArtifactSearchResult | undefined {
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 80)
+			throw new Error("Limit must be between 1 and 80.");
+		if (query.length > 256) throw new Error("Query must be at most 256 characters.");
 		const artifact = this.get(id, sessionId);
 		if (!artifact) return undefined;
 		const stored = readArtifact(artifact.path, true);
@@ -264,44 +312,58 @@ export class ArtifactStore {
 		if (terms.length === 0) throw new Error("Search query requires a word or identifier.");
 		const lines = (stored.content ?? "").split("\n");
 		const phrase = query.trim().toLowerCase();
-		const candidates = lines.flatMap((line, index) => {
-			const lower = line.toLowerCase();
-			const matchedTerms = terms.filter((term) => lower.includes(term));
-			return matchedTerms.length === 0
-				? []
-				: [{ index, matchedTerms: matchedTerms.length, phraseMatch: lower.includes(phrase) }];
-		});
-		candidates.sort(
-			(a, b) =>
-				b.matchedTerms - a.matchedTerms || Number(b.phraseMatch) - Number(a.phraseMatch) || a.index - b.index,
-		);
-		const ranked = candidates.slice(0, limit);
-		const selected = new Set<number>();
+		const ranked: { index: number; score: number }[] = [];
+		let matches = 0;
+		for (let index = 0; index < lines.length; index++) {
+			const lower = (lines[index] ?? "").toLowerCase();
+			const count = terms.reduce((sum, term) => sum + Number(lower.includes(term)), 0);
+			if (count === 0) continue;
+			matches++;
+			const score = count * 2 + Number(lower.includes(phrase));
+			// Keep only the bounded best candidates; repeated matches must not
+			// allocate and sort an object for every line of an 8 MiB artifact.
+			if (ranked.length === limit && score <= (ranked[ranked.length - 1]?.score ?? 0)) continue;
+			const position = ranked.findIndex((candidate) => score > candidate.score);
+			if (position < 0) ranked.push({ index, score });
+			else ranked.splice(position, 0, { index, score });
+			if (ranked.length > limit) ranked.pop();
+		}
+		const selected = new Map<number, string>();
+		let bytes = 0;
+		const add = (index: number) => {
+			if (index < 0 || index >= lines.length || selected.has(index)) return;
+			const line = `${index + 1}:${lineSnippet(lines[index] ?? "", terms)}`;
+			const size = Buffer.byteLength(line) + 1;
+			if (bytes + size > LOOKUP_MAX_BYTES - 256) return;
+			selected.set(index, line);
+			bytes += size;
+		};
+		// Spend the byte budget on the best hits first, not the earliest lines in
+		// the file. Add surrounding evidence only after the hits have an allowance.
+		for (const candidate of ranked) add(candidate.index);
 		for (const candidate of ranked) {
-			for (
-				let around = Math.max(0, candidate.index - 1);
-				around <= Math.min(lines.length - 1, candidate.index + 1);
-				around++
-			) {
-				selected.add(around);
+			if (!selected.has(candidate.index)) continue;
+			// Return a useful evidence window in this call, not just the location
+			// of a hit that forces another read. Overlapping windows merge by index.
+			for (let distance = 1; distance <= 8; distance++) {
+				add(candidate.index - distance);
+				add(candidate.index + distance);
 			}
 		}
-		const matches = ranked.length;
+		const shown = [...selected.keys()].filter((index) =>
+			terms.some((term) => (lines[index] ?? "").toLowerCase().includes(term)),
+		).length;
 		const rendered = [...selected]
-			.sort((a, b) => a - b)
-			.map((index) => `${index + 1}:${lineSnippet(lines[index] ?? "", terms)}`)
+			.sort(([a], [b]) => a - b)
+			.map(([, line]) => line)
 			.join("\n");
-		const searchNote = terms.length > 1 ? " (ranked; partial term matches included)" : "";
-		const truncationNote = artifact.metadata.truncated ? " (stored prefix is truncated)" : "";
-		const marker =
-			matches === 0
-				? `0 matches in ${id}`
-				: `${matches} match${matches === 1 ? "" : "es"} in ${id}${searchNote}${truncationNote}`;
-		const available = Math.max(0, LOOKUP_MAX_BYTES - Buffer.byteLength(marker) - 2);
+		const searchNote = terms.length > 1 ? "; ranked; partial term matches included" : "";
+		const truncationNote = artifact.metadata.truncated ? "; stored prefix is truncated" : "";
+		const marker = `${matches} matches in ${id}; showing ${shown}${searchNote}${truncationNote}; offset reads surrounding lines`;
 		return {
 			artifact: artifact.metadata,
 			matches,
-			text: rendered ? `${marker}\n\n${utf8Head(rendered, available)}` : marker,
+			text: rendered ? `${marker}\n\n${rendered}` : marker,
 		};
 	}
 
@@ -339,11 +401,16 @@ export class ArtifactStore {
 			})
 			.sort((a, b) => b.createdAt - a.createdAt);
 		let retainedBytes = 0;
+		let retainedCount = 0;
 		for (const item of metadata) {
 			const expired = now - item.createdAt > this.ttlMs;
-			const exceedsBudget = retainedBytes + item.storedBytes > this.maxStoreBytes;
+			const exceedsBudget =
+				retainedBytes + item.storedBytes > this.maxStoreBytes || retainedCount >= this.maxArtifacts;
 			if (expired || exceedsBudget) fs.rmSync(artifactPath(this.root, item.id), { force: true });
-			else retainedBytes += item.storedBytes;
+			else {
+				retainedBytes += item.storedBytes;
+				retainedCount++;
+			}
 		}
 	}
 }
