@@ -163,7 +163,7 @@ A child receives the child-only `ask_parent` tool. It can send one concise block
 agent_control(action="reply", id="<run-id>", message="<answer>")
 ```
 
-`agent_control` also lists compact status, steers a running direct child through the sidecar, or cancels it. A parent cannot control grandchildren. Agent definitions opt into nested delegation with `children` frontmatter. The bundled `worker` and read-only `reviewer` may delegate to either role; depth and concurrency limits prevent recursive runaway.
+`agent_control` also lists compact status, steers a running direct child through the sidecar, or cancels it. Reading `status(id)` for a terminal child consumes its unread completion; aggregate status and running-child status do not. Otherwise Pi Core keeps completions pending while the parent is active, then sends one hidden, bounded batch receipt that requests a single parent synthesis turn. The receipt contains versioned run metadata, while full persisted evidence remains explicitly retrievable with `status(id)`. Blocking questions remain immediate, and failed, canceled, or lost children join the next idle batch even when siblings are still running. A parent cannot control grandchildren. Agent definitions opt into nested delegation with `children` frontmatter. The bundled `worker` and read-only `reviewer` may delegate to either role; depth and concurrency limits prevent recursive runaway.
 
 ```markdown
 ---

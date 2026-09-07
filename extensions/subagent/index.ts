@@ -13,7 +13,6 @@ import {
 	CHILD_START_PROTOCOL,
 	type ChildLineage,
 	COMPLETION_MESSAGE_TYPE,
-	COMPLETION_PROTOCOL,
 	createChildLineage,
 	decideDelegation,
 	decodeChildLineage,
@@ -90,6 +89,9 @@ const AskParentParams = Type.Object({
 
 type RunStatus = "running" | "complete" | "failed" | "stopped";
 type DeliveryStatus = "none" | "pending" | "delivered";
+
+const COMPLETION_BATCH_PROTOCOL = "pi-core.child-complete-batch.v1";
+const MAX_COMPLETION_BATCH_BYTES = 12 * 1024;
 
 export interface ManagedRun {
 	id: string;
@@ -327,45 +329,76 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 	const completionPresent = (run: ManagedRun) =>
 		currentCtx?.sessionManager.getBranch().some((entry) => {
 			if (entry.type !== "custom_message" || entry.customType !== COMPLETION_MESSAGE_TYPE) return false;
-			const details = entry.details as { id?: unknown } | undefined;
-			return details?.id === run.id;
+			const details = entry.details as { id?: unknown; runs?: unknown } | undefined;
+			if (details?.id === run.id) return true;
+			return (
+				Array.isArray(details?.runs) &&
+				details.runs.some(
+					(item) => typeof item === "object" && item !== null && (item as { id?: unknown }).id === run.id,
+				)
+			);
 		}) ?? false;
-	const acknowledgeDelivery = (run: ManagedRun) => {
-		if (!completionPresent(run)) return false;
+	const consumeDelivery = (run: ManagedRun) => {
 		run.delivery = "delivered";
 		run.deliveryQueued = false;
 		persist(run, true);
+	};
+	const acknowledgeDelivery = (run: ManagedRun) => {
+		if (!completionPresent(run)) return false;
+		consumeDelivery(run);
 		return true;
 	};
-	const deliverCompletion = (run: ManagedRun) => {
-		if (run.delivery === "delivered" || run.status === "running" || run.deliveryQueued) return;
-		if (acknowledgeDelivery(run)) return;
+	let deliveryInFlight = false;
+	const deliverCompletions = () => {
+		// Keep unread child results local while the parent is active, then request one synthesis turn.
+		if (!currentCtx?.isIdle() || deliveryInFlight) return;
+		const pending = [...runs.values()]
+			.sort((a, b) => a.startedAt - b.startedAt)
+			.filter(
+				(run) =>
+					run.status !== "running" &&
+					run.delivery === "pending" &&
+					!run.deliveryQueued &&
+					!acknowledgeDelivery(run),
+			);
+		if (pending.length === 0) return;
+		const preamble =
+			"Unread subagent results. Synthesize these into one parent-visible update; do not repeat raw reports. " +
+			"Use agent_control status(id) for persisted evidence.\n";
+		const perRunBytes = Math.max(
+			256,
+			Math.floor((MAX_COMPLETION_BATCH_BYTES - Buffer.byteLength(preamble)) / pending.length),
+		);
+		const content =
+			preamble + pending.map((run) => truncateUtf8(`\n${completionText(run)}\n`, perRunBytes)).join("");
+		deliveryInFlight = true;
 		try {
 			pi.sendMessage(
 				{
 					customType: COMPLETION_MESSAGE_TYPE,
-					content: completionText(run),
-					display: true,
+					content,
+					display: false,
 					details: {
-						protocol: COMPLETION_PROTOCOL,
-						id: run.id,
-						agent: run.agent,
-						workspace: {
-							mode: run.workspace ?? "inherit",
-							cwd: run.cwd,
-							branch: run.worktreeBranch,
-							created: run.worktreeCreated ?? false,
-							setup: run.workspaceSetup ?? "not_applicable",
-						},
+						protocol: COMPLETION_BATCH_PROTOCOL,
+						version: 1,
+						runs: pending.map((run) => ({
+							id: run.id,
+							agent: run.agent,
+							status: run.status,
+						})),
 					},
 				},
 				{ deliverAs: "followUp", triggerTurn: true },
 			);
-			run.deliveryQueued = true;
+			for (const run of pending) {
+				run.deliveryQueued = true;
+				persist(run, true);
+			}
 		} catch {
-			run.delivery = "pending";
-			run.deliveryQueued = false;
-			currentCtx?.ui.notify(`Agent ${run.id} finished; delivery will retry.`, "warning");
+			for (const run of pending) run.deliveryQueued = false;
+			currentCtx.ui.notify("Subagent results could not be delivered; delivery will retry.", "warning");
+		} finally {
+			deliveryInFlight = false;
 		}
 	};
 	const deliverQuestion = (run: ManagedRun) => {
@@ -400,7 +433,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		else run.error = truncateUtf8(body);
 		persist(run);
 		updateStatus();
-		deliverCompletion(run);
+		deliverCompletions();
 		prune();
 	};
 	const lineageForRun = (run: ManagedRun): ChildLineage => ({
@@ -538,8 +571,9 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				run.delivery = "pending";
 				persist(run);
 			}
-			if (run.delivery === "pending") deliverCompletion(run);
+			if (run.delivery === "pending" && !acknowledgeDelivery(run)) run.deliveryQueued = false;
 		}
+		deliverCompletions();
 		prune();
 		updateStatus();
 	};
@@ -556,11 +590,10 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 	pi.on("agent_settled", (_event, ctx) => {
 		for (const run of runs.values()) {
 			if (run.question && !run.question.delivered) deliverQuestion(run);
-			if (run.delivery !== "pending") continue;
-			if (acknowledgeDelivery(run)) continue;
+			if (run.delivery !== "pending" || acknowledgeDelivery(run)) continue;
 			run.deliveryQueued = false;
-			deliverCompletion(run);
 		}
+		deliverCompletions();
 		if (tuiBridge) {
 			const hasActiveChildren = [...runs.values()].some((run) => run.status === "running");
 			tuiBridge.settle(childSettlement(ctx), hasActiveChildren);
@@ -776,6 +809,8 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 					const run = runs.get(params.id);
 					if (!run || !ownsDirectChild(childLineage, run))
 						throw new Error(`Unknown direct child: ${params.id}`);
+					// Reading one terminal result is an atomic acknowledgement; overview remains non-consuming.
+					if (run.status !== "running" && run.delivery === "pending") consumeDelivery(run);
 					const result =
 						run.status === "running"
 							? compactStatus(run)
