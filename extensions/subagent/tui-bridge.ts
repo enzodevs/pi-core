@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import {
 	acknowledgeCommand,
 	type ChannelCommand,
+	type ChannelResult,
 	clearQuestion,
 	listPendingCommands,
 	openSidecarChannel,
@@ -30,6 +31,7 @@ class TmuxChildBridge {
 	private stopWatching: (() => void) | undefined;
 	private shutdownTimer: NodeJS.Timeout | undefined;
 	private processing = false;
+	private terminal = false;
 	private pendingQuestionId: string | undefined;
 	private cancelled = false;
 
@@ -46,8 +48,7 @@ class TmuxChildBridge {
 	start(ctx: ExtensionContext): void {
 		this.currentCtx = ctx;
 		this.cancelTimersAndWatcher();
-		const terminal = readResult(this.channel);
-		if (terminal) {
+		if (this.observeTerminal()) {
 			this.scheduleShutdown();
 			return;
 		}
@@ -81,12 +82,12 @@ class TmuxChildBridge {
 	}
 
 	settle(settlement: ChildSettlement, hasActiveChildren: boolean): void {
-		if (hasActiveChildren || this.pendingQuestionId || readResult(this.channel)) return;
+		if (hasActiveChildren || this.pendingQuestionId || this.observeTerminal()) return;
 		const output = truncateUtf8(
 			settlement.output || "No final assistant output returned.",
 			this.limits.handoffBytes,
 		);
-		publishResult(this.channel, { ...settlement, output, finishedAt: Date.now() });
+		this.publishTerminal({ ...settlement, output, finishedAt: Date.now() });
 		this.currentCtx?.ui.notify(
 			"Final handoff delivered to the parent; this pane will close shortly.",
 			"info",
@@ -100,14 +101,32 @@ class TmuxChildBridge {
 			return;
 		}
 		this.cancelTimersAndWatcher();
-		if (!readResult(this.channel)) {
-			publishResult(this.channel, {
+		if (!this.observeTerminal()) {
+			this.publishTerminal({
 				status: this.cancelled ? "stopped" : "failed",
 				output: this.cancelled ? "stopped" : "Child pane closed before completing its handoff.",
 				finishedAt: Date.now(),
 			});
 		}
 		this.currentCtx = undefined;
+	}
+
+	private observeTerminal(): boolean {
+		if (this.terminal) return true;
+		if (!readResult(this.channel)) return false;
+		this.terminal = true;
+		return true;
+	}
+
+	private publishTerminal(result: Omit<ChannelResult, "version" | "token">): void {
+		if (this.terminal) return;
+		if (publishResult(this.channel, result)) {
+			this.terminal = true;
+			return;
+		}
+		// Another process can win the create-once race between our read and write.
+		if (this.observeTerminal()) return;
+		throw new Error("Subagent terminal result already exists but is invalid or unreadable.");
 	}
 
 	private cancelTimersAndWatcher(): void {

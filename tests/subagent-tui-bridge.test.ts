@@ -103,4 +103,36 @@ describe("tmux child sidecar bridge", () => {
 		expect(result?.output).not.toContain("replacement");
 		expect(Buffer.byteLength(result?.output ?? "", "utf8")).toBeLessThanOrEqual(1_024);
 	});
+
+	it("remembers its terminal publication after the parent removes the run directory", () => {
+		const { bridge, channel, ctx } = setup();
+		bridge.settle({ status: "complete", output: "done" }, false);
+		expect(readResult(channel)?.output).toBe("done");
+
+		fs.rmSync(channel.directory, { recursive: true, force: true });
+		expect(() => bridge.settle({ status: "failed", output: "late" }, false)).not.toThrow();
+		expect(() => bridge.shutdown("reload")).not.toThrow();
+		expect(() => bridge.start(ctx)).not.toThrow();
+		expect(() => bridge.shutdown("quit")).not.toThrow();
+		expect(fs.existsSync(channel.directory)).toBe(false);
+	});
+
+	it("remembers a concurrently published terminal result before later cleanup", () => {
+		const { bridge, channel } = setup();
+		expect(publishResult(channel, { status: "complete", output: "winner", finishedAt: 1 })).toBe(true);
+		bridge.settle({ status: "complete", output: "loser" }, false);
+		expect(readResult(channel)?.output).toBe("winner");
+
+		fs.rmSync(channel.directory, { recursive: true, force: true });
+		expect(() => bridge.shutdown("quit")).not.toThrow();
+		expect(fs.existsSync(channel.directory)).toBe(false);
+	});
+
+	it("surfaces initial publication failure without recreating a deleted run directory", () => {
+		const { bridge, channel } = setup();
+		fs.rmSync(channel.directory, { recursive: true, force: true });
+
+		expect(() => bridge.settle({ status: "complete", output: "too late" }, false)).toThrow();
+		expect(fs.existsSync(channel.directory)).toBe(false);
+	});
 });
