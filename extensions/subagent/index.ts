@@ -291,6 +291,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 
 	const tuiBridge = childLineage ? createTmuxChildBridge(pi, childLineage, limits) : undefined;
 	const runs = new Map<string, ManagedRun>();
+	const questionQueued = new Map<string, string>();
 	const concurrency = new GlobalConcurrencyRegistry({
 		filePath: registryPath,
 		limit: limits.globalConcurrency,
@@ -321,10 +322,12 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		}
 	};
 	const prune = () => {
-		const completed = [...runs.values()]
-			.filter((run) => run.status !== "running")
+		// Pending results are the durable unread queue. Only trim terminal runs whose
+		// branch receipt has already acknowledged delivery.
+		const acknowledged = [...runs.values()]
+			.filter((run) => run.status !== "running" && run.delivery === "delivered")
 			.sort((a, b) => b.startedAt - a.startedAt);
-		for (const run of completed.slice(MAX_RECENT_RUNS)) runs.delete(run.id);
+		for (const run of acknowledged.slice(MAX_RECENT_RUNS)) runs.delete(run.id);
 	};
 	const completionPresent = (run: ManagedRun) =>
 		currentCtx?.sessionManager.getBranch().some((entry) => {
@@ -350,9 +353,10 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 	};
 	let deliveryInFlight = false;
 	const deliverCompletions = () => {
-		// Keep unread child results local while the parent is active, then request one synthesis turn.
+		// Healthy siblings form an implicit cohort. Failures remain urgent and do not wait
+		// behind a child that may be stuck.
 		if (!currentCtx?.isIdle() || deliveryInFlight) return;
-		const pending = [...runs.values()]
+		const allPending = [...runs.values()]
 			.sort((a, b) => a.startedAt - b.startedAt)
 			.filter(
 				(run) =>
@@ -361,49 +365,84 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 					!run.deliveryQueued &&
 					!acknowledgeDelivery(run),
 			);
-		if (pending.length === 0) return;
+		const hasRunningSibling = [...runs.values()].some((run) => run.status === "running");
+		const eligible = hasRunningSibling ? allPending.filter((run) => run.status !== "complete") : allPending;
+		if (eligible.length === 0) return;
 		const preamble =
 			"Unread subagent results. Synthesize these into one parent-visible update; do not repeat raw reports. " +
 			"Use agent_control status(id) for persisted evidence.\n";
+
+		// A receipt covers only represented runs. Overflow remains unread for a later batch.
+		const batch: ManagedRun[] = [];
+		for (const run of eligible) {
+			const proposed = [...batch, run];
+			const proposedDetails = {
+				protocol: COMPLETION_BATCH_PROTOCOL,
+				version: 1,
+				runs: proposed.map((item) => ({
+					id: item.id,
+					agent: truncateUtf8(item.agent, 256),
+					status: item.status,
+				})),
+			};
+			const minimumText =
+				preamble +
+				proposed.map((item) => `\nagent: ${item.agent}\nid: ${item.id}\nstatus: ${item.status}\n`).join("");
+			if (
+				batch.length > 0 &&
+				(Buffer.byteLength(JSON.stringify(proposedDetails)) > MAX_COMPLETION_BATCH_BYTES ||
+					Buffer.byteLength(minimumText) > MAX_COMPLETION_BATCH_BYTES)
+			)
+				break;
+			batch.push(run);
+		}
 		const perRunBytes = Math.max(
-			256,
-			Math.floor((MAX_COMPLETION_BATCH_BYTES - Buffer.byteLength(preamble)) / pending.length),
+			1,
+			Math.floor((MAX_COMPLETION_BATCH_BYTES - Buffer.byteLength(preamble)) / batch.length),
 		);
 		const content =
-			preamble + pending.map((run) => truncateUtf8(`\n${completionText(run)}\n`, perRunBytes)).join("");
+			preamble + batch.map((run) => truncateUtf8(`\n${completionText(run)}\n`, perRunBytes)).join("");
+		const details = {
+			protocol: COMPLETION_BATCH_PROTOCOL,
+			version: 1,
+			runs: batch.map((run) => ({ id: run.id, agent: truncateUtf8(run.agent, 256), status: run.status })),
+		};
 		deliveryInFlight = true;
 		try {
 			pi.sendMessage(
-				{
-					customType: COMPLETION_MESSAGE_TYPE,
-					content,
-					display: false,
-					details: {
-						protocol: COMPLETION_BATCH_PROTOCOL,
-						version: 1,
-						runs: pending.map((run) => ({
-							id: run.id,
-							agent: run.agent,
-							status: run.status,
-						})),
-					},
-				},
+				{ customType: COMPLETION_MESSAGE_TYPE, content, display: false, details },
 				{ deliverAs: "followUp", triggerTurn: true },
 			);
-			for (const run of pending) {
+			for (const run of batch) {
 				run.deliveryQueued = true;
 				persist(run, true);
 			}
 		} catch {
-			for (const run of pending) run.deliveryQueued = false;
+			for (const run of batch) run.deliveryQueued = false;
 			currentCtx.ui.notify("Subagent results could not be delivered; delivery will retry.", "warning");
 		} finally {
 			deliveryInFlight = false;
 		}
 	};
-	const deliverQuestion = (run: ManagedRun) => {
+	const questionPresent = (run: ManagedRun, questionId: string) =>
+		currentCtx?.sessionManager.getBranch().some((entry) => {
+			if (entry.type !== "custom_message" || entry.customType !== "pi-core-agent-question") return false;
+			const details = entry.details as { id?: unknown; questionId?: unknown } | undefined;
+			return details?.id === run.id && details.questionId === questionId;
+		}) ?? false;
+	const acknowledgeQuestion = (run: ManagedRun) => {
 		const question = run.question;
-		if (!question || question.delivered || run.status !== "running") return;
+		if (!question || !questionPresent(run, question.id)) return false;
+		question.delivered = true;
+		questionQueued.delete(run.id);
+		persist(run);
+		return true;
+	};
+	const deliverQuestion = (run: ManagedRun, retryQueued = false) => {
+		const question = run.question;
+		if (!question || run.status !== "running" || acknowledgeQuestion(run)) return;
+		if (questionQueued.get(run.id) === question.id && !retryQueued) return;
+		questionQueued.set(run.id, question.id);
 		try {
 			pi.sendMessage(
 				{
@@ -416,9 +455,8 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				},
 				{ deliverAs: "steer", triggerTurn: true },
 			);
-			question.delivered = true;
-			persist(run);
 		} catch {
+			questionQueued.delete(run.id);
 			currentCtx?.ui.notify(`Agent ${run.id} is waiting for a reply; notification will retry.`, "warning");
 		}
 	};
@@ -480,8 +518,12 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			},
 			onQuestion(question) {
 				if (!ownsRun(runs, run, generation)) return;
-				const delivered = run.question?.id === question.id && run.question.delivered;
-				run.question = { ...question, delivered: Boolean(delivered) };
+				const sameQuestion = run.question?.id === question.id;
+				run.question = {
+					...question,
+					delivered: sameQuestion && questionPresent(run, question.id),
+				};
+				if (!sameQuestion) questionQueued.delete(run.id);
 				run.activity = "waiting";
 				persist(run);
 				updateStatus();
@@ -527,6 +569,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			run.child?.abort();
 		}
 		runs.clear();
+		questionQueued.clear();
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
 			const patch = entry.data as PersistedRun;
@@ -543,6 +586,10 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		}
 		const agents = discoverAgents(ctx.cwd, "user").agents;
 		for (const run of runs.values()) {
+			if (run.status === "running" && run.question) {
+				run.question.delivered = questionPresent(run, run.question.id);
+				if (!run.question.delivered) deliverQuestion(run);
+			}
 			if (run.status === "running" && treatTmuxAsAttachable && run.runtime?.backend === "tmux-tui") {
 				try {
 					const lease = await concurrency.adopt(run.id);
@@ -589,7 +636,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 	});
 	pi.on("agent_settled", (_event, ctx) => {
 		for (const run of runs.values()) {
-			if (run.question && !run.question.delivered) deliverQuestion(run);
+			if (run.question && !acknowledgeQuestion(run)) deliverQuestion(run, true);
 			if (run.delivery !== "pending" || acknowledgeDelivery(run)) continue;
 			run.deliveryQueued = false;
 		}

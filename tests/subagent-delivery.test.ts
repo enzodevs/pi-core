@@ -166,6 +166,59 @@ describe("subagent completion delivery", () => {
 		expect(h.sent).toHaveLength(1);
 	});
 
+	it("keeps more than twenty unread results and bounds both batch channels beyond forty-eight", async () => {
+		const runs = Array.from({ length: 60 }, (_, index) =>
+			terminalRun(`run${String(index).padStart(5, "0")}`, { output: "x".repeat(20_000) }),
+		);
+		const h = harness(runs);
+		h.setIdle(true);
+		await h.start();
+
+		expect(h.sent).toHaveLength(1);
+		const message = h.sent[0]?.message;
+		expect(message.details.runs).toHaveLength(60);
+		expect(Buffer.byteLength(message.content)).toBeLessThanOrEqual(12 * 1024);
+		expect(Buffer.byteLength(JSON.stringify(message.details))).toBeLessThanOrEqual(12 * 1024);
+	});
+
+	it("holds a healthy staggered result while retrying a sibling question without an append", async () => {
+		const run = terminalRun("question1", {
+			status: "running",
+			finishedAt: undefined,
+			delivery: "none",
+			question: { id: "q1", text: "Which API?", delivered: true, askedAt: 10 },
+			runtime: {
+				backend: "tmux-tui",
+				sessionFile: "/tmp/missing-child.jsonl",
+				paneId: "%999",
+				channelDirectory: "/tmp/missing-channel",
+				channelToken: "token",
+			},
+		});
+		const h = harness([terminalRun("healthy1"), run]);
+		h.setIdle(true);
+		const starting = h.start();
+		const questions = () => h.sent.filter(({ message }) => message.customType === "pi-core-agent-question");
+		expect(questions()).toHaveLength(1);
+
+		// sendMessage is void in the SDK. No throw and no branch append models its internally
+		// caught asynchronous append failure; the next lifecycle reconciliation must retry.
+		h.settle();
+		expect(questions()).toHaveLength(2);
+		expect(
+			h.sent.filter(({ message }) => message.customType === "pi-core-background-agent-result"),
+		).toHaveLength(0);
+		h.commitLast();
+		h.settle();
+		expect(questions()).toHaveLength(2);
+		await starting;
+		await vi.waitFor(() =>
+			expect(
+				h.sent.filter(({ message }) => message.customType === "pi-core-background-agent-result"),
+			).toHaveLength(1),
+		);
+	});
+
 	it("reconciles append-before-persist receipts on reload and does not leak them across branches", async () => {
 		const h = harness([terminalRun("dddddddd", { deliveryQueued: true })]);
 		h.setIdle(true);
