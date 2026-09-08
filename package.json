@@ -44,7 +44,7 @@
 			"./extensions/image-clipboard/index.ts",
 			"./extensions/background-process/index.ts",
 			"./extensions/memory/index.ts",
-			"./extensions/context-guard/index.ts",
+			"./extensions/json-headroom/index.ts",
 			"./extensions/sudo/index.ts",
 			"./extensions/ask-user-question/index.ts",
 			"./extensions/subagent/index.ts"
@@ -53,6 +53,8 @@
 	"scripts": {
 		"check": "npm run format:check && npm run typecheck && npm test && npm run fallow",
 		"benchmark:fast": "node extensions/fast-mode/benchmark.mjs",
+		"headroom:install": "node extensions/json-headroom/setup.mjs",
+		"headroom:test": "node extensions/json-headroom/check.mjs",
 		"fallow": "fallow dead-code --no-cache --fail-on-issues --format compact --quiet",
 		"fallow:health": "fallow health --no-cache --report-only --format compact --quiet",
 		"format": "biome check --write .",

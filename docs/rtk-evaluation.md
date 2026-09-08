@@ -1,8 +1,12 @@
-# Context guard and RTK evaluation
+# Context guard and RTK evaluation (historical)
 
-## Decision
+## Current decision — 2026-09-07
 
-Keep the command-agnostic context guard as the default. RTK is useful for selected, measured command families, but do not install its global command-rewriting hook. Do not add SQLite or DuckDB to the runtime yet: bounded file-backed recovery addresses the observed problem without another storage layer.
+The context guard has been removed from parent and child agents. Its rolling projection could discard useful tool evidence and create recovery work; byte savings alone did not establish better task completion. Use Pi's normal tool output limits, targeted source-side filtering, and saved logs instead. No automatic RTK hook or replacement artifact system is installed. See [model workflow](model-workflow.md) for the replacement policy and evaluation criteria.
+
+## Original decision (superseded)
+
+The evaluation originally recommended keeping the command-agnostic context guard as the default, selected RTK usage without its global command-rewriting hook, and file-backed recovery rather than SQLite or DuckDB. The measurements below are retained as historical evidence, not a description of the current runtime.
 
 RTK v0.48.0 was installed in an isolated evaluation directory, not on `PATH`, and its matching source was inspected through `opensrc`. The Linux x86_64 musl archive was verified against the release API's SHA-256 digest:
 

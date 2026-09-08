@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install format format-check typecheck test fallow health check pack clean
+.PHONY: help install format format-check typecheck test fallow health check pack clean headroom-install headroom-test
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -25,6 +25,12 @@ fallow: ## Gate on Fallow dead-code findings
 
 health: ## Report advisory Fallow health findings
 	npm run fallow:health
+
+headroom-install: ## Install the optional pinned JSON-only Headroom runtime (requires uv)
+	npm run headroom:install
+
+headroom-test: ## Run the optional real Headroom regression suite
+	npm run headroom:test
 
 check: ## Run all required verification
 	npm run check

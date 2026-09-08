@@ -45,7 +45,8 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Exact-CWD skill profiles** — sessions in the same directory share one visibility policy.
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
 - **Read-only session analytics** — inspect cost, transcripts, errors, and prompt patterns without an always-active tool.
-- **Strategic context guard** — preserve full session/TUI output while projecting bounded, diagnostic-first tool evidence to models.
+- **Context hygiene** — bounded tool outputs and targeted retrieval without lossy rewriting of historical evidence.
+- **Optional JSON compaction** — a local, lossless-only Headroom pilot, disabled by default, with exact original-file recovery.
 - **Observable background subagents** — run real interactive Pi TUI children in tmux, with bounded sidecar delivery and an RPC fallback outside tmux.
 - **Bounded background processes** — watch finite CI gates or run persistent services with rotating searchable logs and direct TUI control.
 - **Interactive questions** — ask for bounded free text, one choice, or multiple choices without guessing.
@@ -86,6 +87,14 @@ pi install "$PWD"
 ```
 
 Pi Core stores mutable state under `~/.pi/agent/pi-core/`. It never modifies discovered skill files.
+
+## Optional Headroom JSON pilot
+
+From this source checkout, run `make headroom-install` (requires `uv` and Python), then `make headroom-test`. Reload Pi and use `/headroom-json on` to opt in for this Pi process; `/headroom-json off` disables it. It stays off by default and adds no model-facing tool.
+
+Only large, complete JSON bash results with supported tabular shapes are compacted. Every rendered cell is checked, original JSON is saved privately with a recovery path, and failures leave results unchanged. File tools, failed commands, instructions, and historical messages are not rewritten. This optional Python worker does not add a Python requirement to the rest of Pi Core.
+
+See [scope, storage, regression tests, and limitations](docs/headroom-json.md). RTK and ICM are not integrated.
 
 ## Skill visibility
 
@@ -141,11 +150,13 @@ The bundled `analyze-sessions` skill provides read-only, on-demand scripts over 
 
 The skill adds no always-active model-facing tool. Ask Pi questions such as “what did Pi cost this week?”, “find the session about rate limits”, or “show where recent sessions hit tool errors.”
 
-## Strategic context guard
+## Context hygiene
 
-Pi Core keeps original tool results in the session and TUI, but projects a smaller evidence view immediately before every model call. A 24 KiB rolling budget prioritizes unseen output: every result in a parallel batch gets a fair first-delivery allowance, rather than treating earlier completions as history. Results that fit pass through unchanged, without redundant artifact receipts. Oversized results keep source-ordered, non-overlapping evidence windows with explicit gaps; failure evidence takes priority over routine status lines, and repeated braces or blank lines retain their structure. Older results shrink once the model has seen them. The same extension is explicitly loaded in interactive and RPC subagents.
+Pi Core bounds output at tool boundaries; it does not rewrite historical tool results before model calls. The former rolling context guard and its artifact lookup tool have been removed: small retained-output budgets could erase useful evidence and cause recovery calls or repeated reads. Parent and child agents now retain the tool evidence provided by their tools, subject to Pi's normal output limits and compaction.
 
-Compression is deterministic and model-free. It never changes files, tool execution, human-visible history, images, or assistant/user messages. Results above the 1,200-byte historical allowance are additionally copied into a private session-owned artifact store under `~/.pi/agent/pi-core/context-artifacts/`; when Pi exposes a complete-output path, the store copies it before the temporary file can disappear. Compressed projections carry an opaque artifact ID, and a single `context_lookup` tool is activated only after an artifact exists. Supply either `query` for ranked evidence or `offset` for a contiguous stored-line range; `limit` is bounded at 80, with a 4 KiB response cap. Search reports total versus shown hits; ranges report continuation; both disclose incomplete stored prefixes. Stored line numbers are not filesystem line numbers, and overflow artifacts may contain more output than the original displayed result. Retrieval cannot cross session ownership and does not recursively archive its own excerpts. Artifacts are capped at 8 MiB each, 128 MiB total, 512 files, and seven days. Storage remains file-backed; RTK and an analytics database are not runtime dependencies. See [the RTK evaluation](docs/rtk-evaluation.md) for measured trade-offs. `/context-guard` reports the latest projection ratio and artifact count. This selective, relevance-aware policy follows evidence that indiscriminate long context can reduce retrieval performance ([Lost in the Middle](https://aclanthology.org/2024.tacl-1.9/)) and that preserving key information outperforms uniform compression ([Concise and Precise Context Compression for Tool-Using Language Models](https://aclanthology.org/2024.findings-acl.974/)).
+Use narrow paths, result limits, and source-side filters. For noisy checks, save full output, preserve the check's exit status, and inspect a focused summary. Read saved overflow output rather than rerunning a successful command. No output-compression CLI is injected automatically. See [CONTEXT-HYGIENE.md](CONTEXT-HYGIENE.md), [workflow and prompting guidance](docs/model-workflow.md), and the historical [RTK evaluation](docs/rtk-evaluation.md).
+
+After upgrading, reload extensions or start a fresh Pi session to unload the old guard. Existing files under `~/.pi/agent/pi-core/context-artifacts/` are no longer read or written; they are left untouched rather than deleting historical session evidence.
 
 ## Background subagents
 

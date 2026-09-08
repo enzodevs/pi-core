@@ -1,0 +1,4 @@
+# JSON only: no proxy, ML, code, or embedding extras.
+headroom-ai==0.37.0
+# Required by Headroom's CCR module import even with CCR disabled.
+httpx==0.28.1

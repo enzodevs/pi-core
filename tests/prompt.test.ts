@@ -25,6 +25,9 @@ describe("managed skill prompt", () => {
 			Object.keys(modes).map((name) => makeSkill(name)),
 			(name) => modes[name] ?? "off",
 		);
+		expect(section).toContain("search_skills");
+		expect(section).toContain("load_skill");
+		expect(section).not.toContain("skill_catalog");
 		expect(section).toContain("full description");
 		expect(section).toContain("/skills/full/SKILL.md");
 		expect(section).toContain("<name>minimal</name>");

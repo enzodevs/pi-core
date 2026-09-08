@@ -25,7 +25,9 @@ These rules adapt the agent-interface principles described by [AXI](https://axi.
 4. **Truncate deliberately**
    - Bound every untrusted or potentially large result.
    - Preserve the beginning or most relevant slice and report omitted size.
-   - Offer full retrieval only when a real workflow requires it.
+   - Preserve a usable overflow reference when omitted evidence may be needed.
+   - Bound output at its source; do not retroactively replace tool history with lossy excerpts or empty results before model calls.
+   - For filtered command output, preserve the underlying command's exit status and save full logs when verification may require them.
 
 5. **Pre-compute useful aggregates**
    - Return counts, status, and conclusions that prevent follow-up calls.
@@ -52,7 +54,7 @@ These rules adapt the agent-interface principles described by [AXI](https://axi.
    - Exclude child reasoning, tool transcripts, usage internals, duplicate task text, and TUI-only details.
 
 10. **Measure before adding clever formats**
-    - Compare schema tokens, result bytes, request count, latency, and task success.
+    - Compare schema tokens, result bytes, request count, recovery calls, user interventions, time to verified completion, and task success.
     - Optimize the dominant cost rather than applying compression everywhere.
     - Reliability and clear recovery paths outrank small token savings.
 
@@ -66,6 +68,7 @@ These rules adapt the agent-interface principles described by [AXI](https://axi.
 - Child contexts remain isolated; only bounded final output enters the parent.
 - Prefer skills for optional procedural knowledge and tools for executable capabilities.
 - Keep project-local prompts opt-in because repositories control their contents.
+- The opt-in Headroom JSON pilot acts only on eligible new tool results, not history. It must validate every rendered cell, save an exact private original, preserve error/exit metadata, and fall back unchanged on failure. Expanding its supported shapes requires preservation regressions.
 
 ## Review checklist
 
