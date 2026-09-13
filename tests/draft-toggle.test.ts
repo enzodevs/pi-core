@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toggleDraft } from "../extensions/draft-toggle/state.js";
+import { DRAFT_ENTRY_TYPE, restoreDraft, toggleDraft } from "../extensions/draft-toggle/state.js";
 
 describe("prompt draft toggle", () => {
 	it("saves the complete editor text and clears the editor", () => {
@@ -32,5 +32,33 @@ describe("prompt draft toggle", () => {
 			draft: "new prompt",
 			editorText: "",
 		});
+	});
+
+	it("restores the latest persisted draft from the active branch", () => {
+		expect(
+			restoreDraft([
+				{ type: "custom", customType: DRAFT_ENTRY_TYPE, data: { version: 1, draft: "old" } },
+				{ type: "message" },
+				{ type: "custom", customType: DRAFT_ENTRY_TYPE, data: { version: 1, draft: "latest" } },
+			]),
+		).toBe("latest");
+	});
+
+	it("honors a persisted clear marker", () => {
+		expect(
+			restoreDraft([
+				{ type: "custom", customType: DRAFT_ENTRY_TYPE, data: { version: 1, draft: "saved" } },
+				{ type: "custom", customType: DRAFT_ENTRY_TYPE, data: { version: 1, draft: null } },
+			]),
+		).toBeUndefined();
+	});
+
+	it("does not revive an older draft when the latest state is malformed", () => {
+		expect(
+			restoreDraft([
+				{ type: "custom", customType: DRAFT_ENTRY_TYPE, data: { version: 1, draft: "saved" } },
+				{ type: "custom", customType: DRAFT_ENTRY_TYPE, data: { version: 1, draft: 42 } },
+			]),
+		).toBeUndefined();
 	});
 });
