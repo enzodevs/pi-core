@@ -15,6 +15,7 @@
 <p align="center">
   <a href="#quickstart"><strong>Quickstart</strong></a> ·
   <a href="#browser-session-isolation"><strong>Browser sessions</strong></a> ·
+  <a href="#context-inspector"><strong>Context</strong></a> ·
   <a href="#skill-visibility"><strong>Skills</strong></a> ·
   <a href="#session-analytics"><strong>Analytics</strong></a> ·
   <a href="#background-subagents"><strong>Subagents</strong></a> ·
@@ -40,11 +41,13 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 | Old sessions are hard to inspect | Search transcripts and report cost, errors, models, and prompt patterns on demand |
 | Fast mode requires restarting or hidden config | Toggle priority processing live with `/fast` |
 | Browser agents collide on one automation session | Scope chrome-devtools-axi to the Pi session with no model-facing tool |
+| Context composition is opaque | Inspect prompt inputs and the last serialized provider payload with `/context` |
 | Tool catalogs grow without discipline | Enforce a written context-hygiene policy for schemas and outputs |
 
 ## Highlights
 
 - **Isolated browser sessions** — chrome-devtools-axi automatically follows the Pi session lifecycle without adding a tool schema or prompt.
+- **Model-invisible context inspector** — `/context` shows usage, prompt inputs, files, skills, tools, messages, and the last provider payload without creating a chat message or model-facing tool.
 - **Exact-CWD skill profiles** — sessions in the same directory share one visibility policy.
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
 - **Read-only session analytics** — inspect cost, transcripts, errors, and prompt patterns without an always-active tool.
@@ -98,6 +101,12 @@ Pi Core assigns `CHROME_DEVTOOLS_AXI_SESSION` from an opaque hash of the current
 The extension registers no model-facing tool, schema, prompt, or output transformation, and it does not start Chrome eagerly. On non-reload session shutdown it stops the matching bridge when that session has a PID file; `/reload` preserves the browser so work can continue afterward.
 
 Machine-specific Chrome launch policy remains outside the portable package. For example, this host exports `CHROME_DEVTOOLS_AXI_CHROME_ARGS="--no-sandbox"` before Pi starts because of its AppArmor configuration.
+
+## Context inspector
+
+Run `/context` for a summary, or select `/context system`, `messages`, `payload`, `files`, `skills`, or `tools` for the exact corresponding data available to Pi. `messages` shows the last model-call context observed by the extension. The TUI view is scrollable and ephemeral: invoking it is handled as an extension command before Pi creates a user message, registers no model-facing tool, writes no session entry, and sends no inspector output to the model.
+
+`payload` is the last serialized provider request observed by Pi Core and is the closest view to the exact wire body. The inspector is loaded last among Pi Core extensions, so it observes their earlier rewrites. A separately loaded extension ordered after it can still rewrite the payload; HTTP headers are not captured; and Pi may estimate current token usage between provider responses.
 
 ## Optional Headroom JSON pilot
 

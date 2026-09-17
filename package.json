@@ -48,7 +48,8 @@
 			"./extensions/json-headroom/index.ts",
 			"./extensions/sudo/index.ts",
 			"./extensions/ask-user-question/index.ts",
-			"./extensions/subagent/index.ts"
+			"./extensions/subagent/index.ts",
+			"./extensions/context-inspector/index.ts"
 		]
 	},
 	"scripts": {
