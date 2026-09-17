@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	type ContextSnapshot,
+	contextFileSource,
 	estimateNextContext,
 	parseContextView,
 	renderContextView,
@@ -40,6 +41,16 @@ const snapshot: ContextSnapshot = {
 };
 
 describe("context inspector", () => {
+	it("classifies context files by their relationship to the working directory", () => {
+		expect(contextFileSource("/work/project/AGENTS.md", "/work/project", "/home/test")).toBe(
+			"current project",
+		);
+		expect(contextFileSource("/work/AGENTS.md", "/work/project", "/home/test")).toBe("ancestor instructions");
+		expect(contextFileSource("/home/test/.pi/agent/AGENTS.md", "/work/project", "/home/test")).toBe(
+			"global agent",
+		);
+	});
+
 	it("estimates the next request from prompt, messages, and tools", () => {
 		expect(estimateNextContext("12345678", [], ["12345678"], 100)).toEqual({
 			promptTokens: 2,
@@ -66,7 +77,9 @@ describe("context inspector", () => {
 
 	it("renders exact prompt inputs and captured payload on demand", () => {
 		expect(renderContextView("system", snapshot)).toBe("SYSTEM BODY");
-		expect(renderContextView("files", snapshot)).toContain("/work/AGENTS.md\n  5 B\nRULES");
+		expect(renderContextView("files", snapshot)).toContain(
+			"/work/AGENTS.md\n  source: current project · ~2 tokens · 5 B\nRULES",
+		);
 		expect(renderContextView("skills", snapshot)).toContain("file: /skills/review/SKILL.md");
 		expect(renderContextView("tools", snapshot)).toContain('"read": "Read a file"');
 		expect(renderContextView("payload", snapshot)).toContain('"serialized"');

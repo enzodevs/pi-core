@@ -28,10 +28,11 @@ export default function contextInspector(pi: ExtensionAPI): void {
 				ctx.ui.notify(`Usage: /context ${CONTEXT_VIEWS.join("|")}`, "error");
 				return;
 			}
-			const content = renderContextView(view, {
+			const options = ctx.getSystemPromptOptions();
+			const snapshot = {
 				usage: ctx.getContextUsage(),
 				systemPrompt: ctx.getSystemPrompt(),
-				options: ctx.getSystemPromptOptions(),
+				options,
 				messages: lastMessages,
 				payload: lastPayload,
 				payloadCapturedAt,
@@ -42,8 +43,10 @@ export default function contextInspector(pi: ExtensionAPI): void {
 					.getAllTools()
 					.filter((tool) => pi.getActiveTools().includes(tool.name))
 					.map(({ name, description, parameters }) => ({ name, description, parameters })),
-			});
-			if (ctx.mode === "tui") await showContextInspector(ctx, view, content);
+			};
+			const content = renderContextView(view, snapshot);
+			if (ctx.mode === "tui")
+				await showContextInspector(ctx, view, content, { options, messages: lastMessages });
 			else ctx.ui.notify(content, "info");
 		},
 	});

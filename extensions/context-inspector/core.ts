@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { dirname, relative, resolve, sep } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
 	type BuildSystemPromptOptions,
@@ -40,6 +42,24 @@ export interface ContextEstimate {
 function estimateValueTokens(value: unknown): number {
 	const serialized = typeof value === "string" ? value : json(value);
 	return Math.ceil(serialized.length / 4);
+}
+
+export function estimateTextTokens(value: string): number {
+	return estimateValueTokens(value);
+}
+
+export function contextFileSource(path: string, cwd: string, home = homedir()): string {
+	const file = resolve(path);
+	const workingDirectory = resolve(cwd);
+	const directory = dirname(file);
+	if (directory === workingDirectory) return "current project";
+	const fromDirectory = relative(directory, workingDirectory);
+	if (fromDirectory && fromDirectory !== ".." && !fromDirectory.startsWith(`..${sep}`)) {
+		return "ancestor instructions";
+	}
+	const fromAgent = relative(resolve(home, ".pi", "agent"), file);
+	if (fromAgent && fromAgent !== ".." && !fromAgent.startsWith(`..${sep}`)) return "global agent";
+	return "explicit context";
 }
 
 export function estimateNextContext(
@@ -92,14 +112,17 @@ export function renderContextView(view: ContextView, snapshot: ContextSnapshot):
 	}
 	if (view === "files") {
 		return listOrNone(
-			(options.contextFiles ?? []).map((file) => `${file.path}\n  ${bytes(file.content)}\n${file.content}`),
+			(options.contextFiles ?? []).map(
+				(file) =>
+					`${file.path}\n  source: ${contextFileSource(file.path, options.cwd)} · ~${estimateTextTokens(file.content).toLocaleString()} tokens · ${bytes(file.content)}\n${file.content}`,
+			),
 		);
 	}
 	if (view === "skills") {
 		return listOrNone(
 			(options.skills ?? []).map(
 				(skill) =>
-					`${skill.name}\n  file: ${skill.filePath}\n  model-visible: ${!skill.disableModelInvocation}\n  ${skill.description}`,
+					`${skill.name}\n  source: ${skill.sourceInfo.scope} · ~${estimateTextTokens(`${skill.name} ${skill.description}`).toLocaleString()} tokens · model-visible: ${!skill.disableModelInvocation}\n  file: ${skill.filePath}\n  ${skill.description}`,
 			),
 		);
 	}
