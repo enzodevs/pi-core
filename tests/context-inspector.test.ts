@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	type ContextSnapshot,
+	estimateNextContext,
 	parseContextView,
 	renderContextView,
 } from "../extensions/context-inspector/core.js";
@@ -35,9 +36,20 @@ const snapshot: ContextSnapshot = {
 	sessionId: "session-1",
 	sessionFile: "/sessions/1.jsonl",
 	model: "openai/gpt",
+	toolDefinitions: [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
 };
 
 describe("context inspector", () => {
+	it("estimates the next request from prompt, messages, and tools", () => {
+		expect(estimateNextContext("12345678", [], ["12345678"], 100)).toEqual({
+			promptTokens: 2,
+			messageTokens: 0,
+			toolTokens: 2,
+			totalTokens: 4,
+			percent: 4,
+		});
+	});
+
 	it("parses only supported views and defaults to summary", () => {
 		expect(parseContextView("")).toBe("summary");
 		expect(parseContextView(" PAYLOAD ")).toBe("payload");
@@ -46,9 +58,10 @@ describe("context inspector", () => {
 
 	it("reports status and exactness boundaries", () => {
 		const output = renderContextView("summary", snapshot);
-		expect(output).toContain("1,250 / 10,000 tokens (12.5%)");
+		expect(output).toContain("next request estimate:");
+		expect(output).toContain("last measured: 1,250 tokens");
 		expect(output).toContain("context files: 1");
-		expect(output).toContain("extensions loaded after this one may still rewrite payload");
+		expect(output).toContain("extensions loaded after this one may still rewrite the provider payload");
 	});
 
 	it("renders exact prompt inputs and captured payload on demand", () => {

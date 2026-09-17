@@ -1,4 +1,9 @@
-import type { BuildSystemPromptOptions, ContextUsage } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import {
+	type BuildSystemPromptOptions,
+	type ContextUsage,
+	estimateTokens,
+} from "@earendil-works/pi-coding-agent";
 
 export const CONTEXT_VIEWS = [
 	"summary",
@@ -21,6 +26,42 @@ export interface ContextSnapshot {
 	sessionId: string;
 	sessionFile: string | undefined;
 	model: string | undefined;
+	toolDefinitions: unknown[];
+}
+
+export interface ContextEstimate {
+	promptTokens: number;
+	messageTokens: number;
+	toolTokens: number;
+	totalTokens: number;
+	percent: number | undefined;
+}
+
+function estimateValueTokens(value: unknown): number {
+	const serialized = typeof value === "string" ? value : json(value);
+	return Math.ceil(serialized.length / 4);
+}
+
+export function estimateNextContext(
+	systemPrompt: string,
+	messages: readonly unknown[],
+	toolDefinitions: readonly unknown[],
+	contextWindow: number | undefined,
+): ContextEstimate {
+	const promptTokens = estimateValueTokens(systemPrompt);
+	const messageTokens = messages.reduce<number>(
+		(total, message) => total + estimateTokens(message as AgentMessage),
+		0,
+	);
+	const toolTokens = toolDefinitions.reduce<number>((total, tool) => total + estimateValueTokens(tool), 0);
+	const totalTokens = promptTokens + messageTokens + toolTokens;
+	return {
+		promptTokens,
+		messageTokens,
+		toolTokens,
+		totalTokens,
+		percent: contextWindow && contextWindow > 0 ? (totalTokens / contextWindow) * 100 : undefined,
+	};
 }
 
 export function parseContextView(value: string): ContextView | undefined {
@@ -67,6 +108,12 @@ export function renderContextView(view: ContextView, snapshot: ContextSnapshot):
 	}
 
 	const usage = snapshot.usage;
+	const estimate = estimateNextContext(
+		snapshot.systemPrompt,
+		snapshot.messages,
+		snapshot.toolDefinitions,
+		usage?.contextWindow,
+	);
 	const files = options.contextFiles ?? [];
 	const skills = options.skills ?? [];
 	const messageBytes = bytes(json(snapshot.messages));
@@ -75,7 +122,9 @@ export function renderContextView(view: ContextView, snapshot: ContextSnapshot):
 		`session: ${snapshot.sessionId}`,
 		`session file: ${snapshot.sessionFile ?? "(ephemeral)"}`,
 		`model: ${snapshot.model ?? "(none)"}`,
-		`usage: ${usage?.tokens?.toLocaleString() ?? "unknown"} / ${usage?.contextWindow.toLocaleString() ?? "unknown"} tokens (${usage?.percent?.toFixed(1) ?? "unknown"}%)`,
+		`next request estimate: ~${estimate.totalTokens.toLocaleString()} / ${usage?.contextWindow.toLocaleString() ?? "unknown"} tokens (~${estimate.percent?.toFixed(1) ?? "unknown"}%)`,
+		`last measured: ${usage?.tokens?.toLocaleString() ?? "not available yet"} tokens`,
+		`breakdown: prompt ~${estimate.promptTokens.toLocaleString()} · messages ~${estimate.messageTokens.toLocaleString()} · tools ~${estimate.toolTokens.toLocaleString()}`,
 		`system prompt: ${bytes(snapshot.systemPrompt)}`,
 		`conversation: ${snapshot.messages.length} messages, ${messageBytes}`,
 		`context files: ${files.length}`,
@@ -85,6 +134,7 @@ export function renderContextView(view: ContextView, snapshot: ContextSnapshot):
 		"",
 		"Views: /context summary|system|messages|payload|files|skills|tools",
 		"Exactness: payload is the last serialized provider body observed by this extension. System/options are current base inputs; messages are the last model-call context observed by this extension.",
-		"Blind spots: extensions loaded after this one may still rewrite payload; secrets in HTTP headers are never captured; current token usage can be estimated by Pi.",
+		"Blind spot: extensions loaded after this one may still rewrite the provider payload.",
+		"Estimates use Pi's conservative characters/4 heuristic. The provider's tokenizer is authoritative after a request.",
 	].join("\n");
 }

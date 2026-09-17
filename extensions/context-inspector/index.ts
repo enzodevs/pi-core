@@ -38,6 +38,10 @@ export default function contextInspector(pi: ExtensionAPI): void {
 				sessionId: ctx.sessionManager.getSessionId(),
 				sessionFile: ctx.sessionManager.getSessionFile(),
 				model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+				toolDefinitions: pi
+					.getAllTools()
+					.filter((tool) => pi.getActiveTools().includes(tool.name))
+					.map(({ name, description, parameters }) => ({ name, description, parameters })),
 			});
 			if (ctx.mode === "tui") await showContextInspector(ctx, view, content);
 			else ctx.ui.notify(content, "info");

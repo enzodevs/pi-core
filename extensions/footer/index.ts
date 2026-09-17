@@ -1,10 +1,19 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { estimateNextContext } from "../context-inspector/core.js";
 
-function contextLabel(ctx: ExtensionContext): string {
+function contextLabel(ctx: ExtensionContext, pi: ExtensionAPI, messages: readonly unknown[]): string {
 	const usage = ctx.getContextUsage();
-	if (!usage || usage.percent === null) return "ctx —";
-	return `ctx ${Math.round(usage.percent)}%`;
+	if (!usage) return "ctx —";
+	if (usage.tokens !== null && usage.tokens > 0 && usage.percent !== null)
+		return `ctx ${Math.round(usage.percent)}%`;
+	const active = new Set(pi.getActiveTools());
+	const tools = pi
+		.getAllTools()
+		.filter((tool) => active.has(tool.name))
+		.map(({ name, description, parameters }) => ({ name, description, parameters }));
+	const estimate = estimateNextContext(ctx.getSystemPrompt(), messages, tools, usage.contextWindow);
+	return estimate.percent === undefined ? "ctx —" : `ctx ~${Math.max(1, Math.round(estimate.percent))}%`;
 }
 
 export function chooseFooterParts(
@@ -40,6 +49,12 @@ export function chooseFooterParts(
 
 export default function minimalFooter(pi: ExtensionAPI): void {
 	let activeTui: { requestRender(): void } | undefined;
+	let lastMessages: unknown[] = [];
+
+	pi.on("context", (event) => {
+		lastMessages = structuredClone(event.messages);
+		activeTui?.requestRender();
+	});
 
 	pi.on("model_select", () => activeTui?.requestRender());
 	pi.on("thinking_level_select", () => activeTui?.requestRender());
@@ -67,7 +82,7 @@ export default function minimalFooter(pi: ExtensionAPI): void {
 						model: modelLabel,
 						sessionName: pi.getSessionName(),
 						branch: footerData.getGitBranch() ?? undefined,
-						context: contextLabel(ctx),
+						context: contextLabel(ctx, pi, lastMessages),
 						statuses,
 					});
 

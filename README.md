@@ -106,6 +106,8 @@ Machine-specific Chrome launch policy remains outside the portable package. For 
 
 Run `/context` for a summary, or select `/context system`, `messages`, `payload`, `files`, `skills`, or `tools` for the exact corresponding data available to Pi. `messages` shows the last model-call context observed by the extension. The TUI view is scrollable and ephemeral: invoking it is handled as an extension command before Pi creates a user message, registers no model-facing tool, writes no session entry, and sends no inspector output to the model.
 
+The summary leads with an estimated next-request budget, split across the system prompt, messages, and active tool definitions. Before the first provider response, the footer shows this as `ctx ~N%` instead of the misleading measured `0%`; after a response it switches to Pi's provider-derived reading.
+
 `payload` is the last serialized provider request observed by Pi Core and is the closest view to the exact wire body. The inspector is loaded last among Pi Core extensions, so it observes their earlier rewrites. A separately loaded extension ordered after it can still rewrite the payload; HTTP headers are not captured; and Pi may estimate current token usage between provider responses.
 
 ## Optional Headroom JSON pilot
