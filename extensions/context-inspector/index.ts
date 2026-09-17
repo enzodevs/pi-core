@@ -1,5 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { CONTEXT_VIEWS, parseContextView, renderContextView } from "./core.js";
+import { getSkillMode, loadConfig } from "../skill-manager/config.js";
+import { getStoragePaths } from "../skill-manager/paths.js";
+import { resolveProjectRoot } from "../skill-manager/project-root.js";
+import { renderManagedSkills, replaceSkillsSection } from "../skill-manager/prompt.js";
+import { CONTEXT_VIEWS, renderContextView } from "./core.js";
 import { showContextInspector } from "./ui.js";
 
 export default function contextInspector(pi: ExtensionAPI): void {
@@ -17,22 +21,32 @@ export default function contextInspector(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("context", {
-		description: "Inspect model context, prompt inputs, files, skills, tools, and provider payload",
-		getArgumentCompletions: (prefix) => {
-			const matches = CONTEXT_VIEWS.filter((view) => view.startsWith(prefix));
-			return matches.length > 0 ? matches.map((view) => ({ value: view, label: view })) : null;
-		},
+		description: "Open the model context dashboard",
 		handler: async (args, ctx) => {
-			const view = parseContextView(args);
-			if (!view) {
-				ctx.ui.notify(`Usage: /context ${CONTEXT_VIEWS.join("|")}`, "error");
+			if (args.trim()) {
+				ctx.ui.notify("Usage: /context", "error");
 				return;
 			}
 			const options = ctx.getSystemPromptOptions();
+			const [config, project] = await Promise.all([
+				loadConfig(getStoragePaths().config),
+				resolveProjectRoot(ctx.cwd),
+			]);
+			const skillModes = new Map(
+				(options.skills ?? []).map((skill) => [skill.name, getSkillMode(config, project, skill.name)]),
+			);
+			const effectiveSkills = (options.skills ?? []).filter((skill) => {
+				const mode = skillModes.get(skill.name) ?? "full";
+				return !skill.disableModelInvocation && (mode === "full" || mode === "name");
+			});
+			const effectiveSystemPrompt = replaceSkillsSection(
+				ctx.getSystemPrompt(),
+				renderManagedSkills(options.skills ?? [], (name) => skillModes.get(name) ?? "full"),
+			);
 			const snapshot = {
 				usage: ctx.getContextUsage(),
-				systemPrompt: ctx.getSystemPrompt(),
-				options,
+				systemPrompt: effectiveSystemPrompt,
+				options: { ...options, skills: effectiveSkills },
 				messages: lastMessages,
 				payload: lastPayload,
 				payloadCapturedAt,
@@ -44,10 +58,17 @@ export default function contextInspector(pi: ExtensionAPI): void {
 					.filter((tool) => pi.getActiveTools().includes(tool.name))
 					.map(({ name, description, parameters }) => ({ name, description, parameters })),
 			};
-			const content = renderContextView(view, snapshot);
-			if (ctx.mode === "tui")
-				await showContextInspector(ctx, view, content, { options, messages: lastMessages });
-			else ctx.ui.notify(content, "info");
+			const contents = Object.fromEntries(
+				CONTEXT_VIEWS.map((view) => [view, renderContextView(view, snapshot)]),
+			) as Record<(typeof CONTEXT_VIEWS)[number], string>;
+			if (ctx.mode === "tui") {
+				await showContextInspector(ctx, "summary", {
+					options,
+					messages: lastMessages,
+					contents,
+					skillModes,
+				});
+			} else ctx.ui.notify(contents.summary, "info");
 		},
 	});
 }

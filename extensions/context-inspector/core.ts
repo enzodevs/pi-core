@@ -107,7 +107,7 @@ export function renderContextView(view: ContextView, snapshot: ContextSnapshot):
 	if (view === "messages") return json(snapshot.messages);
 	if (view === "payload") {
 		return snapshot.payload === undefined
-			? "No provider request captured yet. Send one model turn, then run /context payload."
+			? "No provider request captured yet. Send one model turn, then return to the payload panel."
 			: json(snapshot.payload);
 	}
 	if (view === "files") {
@@ -155,7 +155,7 @@ export function renderContextView(view: ContextView, snapshot: ContextSnapshot):
 		`tools selected: ${options.selectedTools?.length ?? 0}`,
 		`last provider payload: ${snapshot.payloadCapturedAt ?? "not captured"}`,
 		"",
-		"Views: /context summary|system|messages|payload|files|skills|tools",
+		"Panels: summary · files · skills · tools · messages · system · payload",
 		"Exactness: payload is the last serialized provider body observed by this extension. System/options are current base inputs; messages are the last model-call context observed by this extension.",
 		"Blind spot: extensions loaded after this one may still rewrite the provider payload.",
 		"Estimates use Pi's conservative characters/4 heuristic. The provider's tokenizer is authoritative after a request.",

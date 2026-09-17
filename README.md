@@ -104,7 +104,7 @@ Machine-specific Chrome launch policy remains outside the portable package. For 
 
 ## Context inspector
 
-Run `/context` for a summary, or select `/context system`, `messages`, `payload`, `files`, `skills`, or `tools` for the exact corresponding data available to Pi. `messages` shows the last model-call context observed by the extension. The TUI view is scrollable and ephemeral: invoking it is handled as an extension command before Pi creates a user message, registers no model-facing tool, writes no session entry, and sends no inspector output to the model.
+Run `/context` to open the dashboard, then use Tab and Shift+Tab to move through summary, files, skills, tools, messages, system-prompt, and provider-payload panels. Arrow keys select inventory rows or scroll raw content. The skills panel reports only `full` and `name` entries that are actually present in model context; searchable and off skills are explicitly excluded until their instructions enter the conversation through `load_skill`. The TUI is ephemeral: invoking it is handled before Pi creates a user message, registers no model-facing tool, writes no session entry, and sends no inspector output to the model.
 
 The summary leads with an estimated next-request budget, split across the system prompt, messages, and active tool definitions. Before the first provider response, the footer shows this as `ctx ~N%` instead of the misleading measured `0%`; after a response it switches to Pi's provider-derived reading.
 

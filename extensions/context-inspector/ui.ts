@@ -5,6 +5,8 @@ import { type ContextView, contextFileSource, estimateTextTokens } from "./core.
 interface InspectorData {
 	options: BuildSystemPromptOptions;
 	messages: readonly unknown[];
+	contents: Record<ContextView, string>;
+	skillModes: ReadonlyMap<string, "full" | "name" | "searchable" | "off">;
 }
 interface InspectorItem {
 	title: string;
@@ -18,32 +20,36 @@ type ThemeLike = {
 
 export async function showContextInspector(
 	ctx: ExtensionCommandContext,
-	view: ContextView,
-	content: string,
+	initialView: ContextView,
 	data: InspectorData,
 ): Promise<void> {
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+		let view = initialView;
 		let top = 0;
 		let selected = 0;
-		const summary = view === "summary" ? content.split("\n") : undefined;
-		const items = listItems(view, data);
 		const component: Component = {
 			invalidate() {},
 			render(width) {
 				const safeWidth = Math.max(12, width);
+				const items = listItems(view, data);
 				if (items) {
 					const visibleItems = Math.max(2, Math.floor((tui.terminal.rows - 11) / 2));
 					if (selected < top) top = selected;
 					if (selected >= top + visibleItems) top = selected - visibleItems + 1;
-					return renderInventory(view, items, selected, top, visibleItems, safeWidth, theme);
+					return [
+						renderTabs(view, safeWidth, theme),
+						...renderInventory(view, items, selected, top, visibleItems, safeWidth, theme),
+					];
 				}
 				const bodyWidth = Math.max(8, safeWidth - 2);
+				const content = data.contents[view];
+				const summary = view === "summary" ? content.split("\n") : undefined;
 				const source = summary ? renderSummary(summary, bodyWidth, theme) : styledRaw(view, content, theme);
 				const lines = source.flatMap((line) => wrapTextWithAnsi(line || " ", bodyWidth));
 				const visibleRows = Math.max(3, tui.terminal.rows - 5);
 				top = Math.min(top, Math.max(0, lines.length - visibleRows));
 				return [
-					theme.fg("accent", theme.bold(view === "summary" ? "Context budget" : `Context · ${view}`)),
+					renderTabs(view, safeWidth, theme),
 					...lines.slice(top, top + visibleRows).map((line) => ` ${truncateToWidth(line, bodyWidth)}`),
 					theme.fg(
 						"dim",
@@ -54,6 +60,17 @@ export async function showContextInspector(
 			handleInput(input) {
 				const page = Math.max(3, tui.terminal.rows - 8);
 				if (matchesKey(input, Key.escape) || matchesKey(input, Key.enter)) return done();
+				if (matchesKey(input, Key.tab) || matchesKey(input, Key.shift("tab"))) {
+					const direction = matchesKey(input, Key.shift("tab")) ? -1 : 1;
+					const index = CONTEXT_PANELS.indexOf(view);
+					view =
+						CONTEXT_PANELS[(index + direction + CONTEXT_PANELS.length) % CONTEXT_PANELS.length] ?? "summary";
+					top = 0;
+					selected = 0;
+					tui.requestRender();
+					return;
+				}
+				const items = listItems(view, data);
 				if (items) {
 					if (matchesKey(input, Key.up)) selected = Math.max(0, selected - 1);
 					else if (matchesKey(input, Key.down)) selected = Math.min(items.length - 1, selected + 1);
@@ -74,6 +91,23 @@ export async function showContextInspector(
 	});
 }
 
+const CONTEXT_PANELS: readonly ContextView[] = [
+	"summary",
+	"files",
+	"skills",
+	"tools",
+	"messages",
+	"system",
+	"payload",
+];
+
+function renderTabs(view: ContextView, width: number, theme: ThemeLike): string {
+	const tabs = CONTEXT_PANELS.map((panel) =>
+		panel === view ? theme.fg("accent", theme.bold(`[${panel}]`)) : theme.fg("dim", panel),
+	);
+	return truncateToWidth(`${tabs.join("  ")}   ${theme.fg("dim", "Tab/⇧Tab")}`, width);
+}
+
 function listItems(view: ContextView, data: InspectorData): InspectorItem[] | undefined {
 	if (view === "files")
 		return (data.options.contextFiles ?? []).map((file) => ({
@@ -82,11 +116,19 @@ function listItems(view: ContextView, data: InspectorData): InspectorItem[] | un
 			detail: file.path,
 		}));
 	if (view === "skills")
-		return (data.options.skills ?? []).map((skill) => ({
-			title: skill.name,
-			meta: `${skill.sourceInfo.scope}  ·  ~${estimateTextTokens(`${skill.name} ${skill.description}`).toLocaleString()} tokens${skill.disableModelInvocation ? "  ·  explicit only" : ""}`,
-			detail: `${skill.filePath}\n${skill.description}`,
-		}));
+		return (data.options.skills ?? [])
+			.filter((skill) => {
+				const mode = data.skillModes.get(skill.name) ?? "full";
+				return !skill.disableModelInvocation && (mode === "full" || mode === "name");
+			})
+			.map((skill) => {
+				const mode = data.skillModes.get(skill.name) ?? "full";
+				return {
+					title: skill.name,
+					meta: `${mode}  ·  ${skill.sourceInfo.scope}  ·  ~${estimateTextTokens(mode === "name" ? skill.name : `${skill.name} ${skill.description}`).toLocaleString()} tokens`,
+					detail: `${skill.filePath}\n${mode === "name" ? "Only the name is in model context; instructions remain unloaded." : skill.description}`,
+				};
+			});
 	if (view === "tools")
 		return (data.options.selectedTools ?? []).map((name) => ({
 			title: name,
@@ -117,8 +159,12 @@ function renderInventory(
 	const bodyWidth = Math.max(8, width - 2);
 	const current = items[selected];
 	const lines = [
-		theme.fg("accent", theme.bold(`Context · ${view}`)),
-		theme.fg("dim", `${items.length} loaded`),
+		theme.fg(
+			"dim",
+			view === "skills"
+				? `${items.length} model-visible · searchable/off excluded`
+				: `${items.length} loaded`,
+		),
 		"",
 	];
 	if (items.length === 0) lines.push(theme.fg("muted", "Nothing loaded in this view."));
@@ -183,11 +229,8 @@ function renderSummary(lines: string[], width: number, theme: ThemeLike): string
 			? theme.fg("dim", "Not measured yet — appears after the first model response")
 			: `${find("last measured:")} in the last provider response`,
 		"",
-		theme.fg("accent", "/context files") + theme.fg("dim", "  instructions, source, and cost"),
-		theme.fg("accent", "/context skills") + theme.fg("dim", " skills, source, and cost"),
-		theme.fg("accent", "/context tools") + theme.fg("dim", "  active tools and cost"),
-		theme.fg("accent", "/context messages") + theme.fg("dim", "  last model context"),
-		theme.fg("accent", "/context payload") + theme.fg("dim", "   last provider body"),
+		theme.fg("accent", "Tab / Shift+Tab") + theme.fg("dim", "  move between context panels"),
+		theme.fg("accent", "↑ / ↓") + theme.fg("dim", "              select an item or scroll content"),
 		"",
 		theme.fg("dim", "~ estimated; provider token usage is authoritative after a response."),
 	];
