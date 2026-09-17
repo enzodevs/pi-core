@@ -17,6 +17,7 @@ import {
 	RpcEventTracker,
 } from "../extensions/subagent/protocol.js";
 import {
+	AXI_SESSION_EXTENSION_PATH,
 	buildChildArgs,
 	buildChildTools,
 	parentPromptCommand,
@@ -145,7 +146,9 @@ describe("subagent lineage and delegation", () => {
 
 		expect(args.slice(0, 3)).toEqual(["--mode", "rpc", "--no-session"]);
 		expect(args[extensionIndex + 1]).toBe(path.resolve(extensionPath));
-		expect(args.filter((arg) => arg === "--extension")).toHaveLength(1);
+		expect(args[extensionIndex + 2]).toBe("--extension");
+		expect(args[extensionIndex + 3]).toBe(path.resolve(AXI_SESSION_EXTENSION_PATH));
+		expect(args.filter((arg) => arg === "--extension")).toHaveLength(2);
 		expect(args).toContain("--no-extensions");
 		expect(args).toContain("--no-skills");
 		expect(args).toContain("--no-prompt-templates");
@@ -159,10 +162,13 @@ describe("subagent lineage and delegation", () => {
 		expect(args).toContain("high");
 	});
 
-	it("resolves the explicit child extension to this loaded package instance", () => {
+	it("resolves the explicit child extensions to this loaded package instance", () => {
 		expect(path.isAbsolute(SUBAGENT_EXTENSION_PATH)).toBe(true);
 		expect(SUBAGENT_EXTENSION_PATH).toMatch(/extensions[/\\]subagent[/\\]index\.ts$/);
 		expect(fs.existsSync(SUBAGENT_EXTENSION_PATH)).toBe(true);
+		expect(path.isAbsolute(AXI_SESSION_EXTENSION_PATH)).toBe(true);
+		expect(AXI_SESSION_EXTENSION_PATH).toMatch(/extensions[/\\]axi-session[/\\]index\.ts$/);
+		expect(fs.existsSync(AXI_SESSION_EXTENSION_PATH)).toBe(true);
 	});
 });
 

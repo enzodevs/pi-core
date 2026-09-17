@@ -32,6 +32,7 @@
 			"./themes/interstellar.json"
 		],
 		"extensions": [
+			"./extensions/axi-session/index.ts",
 			"./extensions/skill-manager/index.ts",
 			"./extensions/fast-mode/index.ts",
 			"./extensions/file-autocomplete/index.ts",

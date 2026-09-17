@@ -14,6 +14,7 @@
 
 <p align="center">
   <a href="#quickstart"><strong>Quickstart</strong></a> ·
+  <a href="#browser-session-isolation"><strong>Browser sessions</strong></a> ·
   <a href="#skill-visibility"><strong>Skills</strong></a> ·
   <a href="#session-analytics"><strong>Analytics</strong></a> ·
   <a href="#background-subagents"><strong>Subagents</strong></a> ·
@@ -38,10 +39,12 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 | Every skill inflates every prompt | Choose `full`, `name`, `searchable`, or `off` per working directory |
 | Old sessions are hard to inspect | Search transcripts and report cost, errors, models, and prompt patterns on demand |
 | Fast mode requires restarting or hidden config | Toggle priority processing live with `/fast` |
+| Browser agents collide on one automation session | Scope chrome-devtools-axi to the Pi session with no model-facing tool |
 | Tool catalogs grow without discipline | Enforce a written context-hygiene policy for schemas and outputs |
 
 ## Highlights
 
+- **Isolated browser sessions** — chrome-devtools-axi automatically follows the Pi session lifecycle without adding a tool schema or prompt.
 - **Exact-CWD skill profiles** — sessions in the same directory share one visibility policy.
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
 - **Read-only session analytics** — inspect cost, transcripts, errors, and prompt patterns without an always-active tool.
@@ -87,6 +90,14 @@ pi install "$PWD"
 ```
 
 Pi Core stores mutable state under `~/.pi/agent/pi-core/`. It never modifies discovered skill files.
+
+## Browser session isolation
+
+Pi Core assigns `CHROME_DEVTOOLS_AXI_SESSION` from an opaque hash of the current Pi session ID. Commands launched by Pi inherit the same value, so repeated chrome-devtools-axi calls share one browser while concurrent parent sessions and subagents do not share bridges, tabs, or stale-ref generations. Subagents explicitly load the same lifecycle extension and derive their own session value.
+
+The extension registers no model-facing tool, schema, prompt, or output transformation, and it does not start Chrome eagerly. On non-reload session shutdown it stops the matching bridge when that session has a PID file; `/reload` preserves the browser so work can continue afterward.
+
+Machine-specific Chrome launch policy remains outside the portable package. For example, this host exports `CHROME_DEVTOOLS_AXI_CHROME_ARGS="--no-sandbox"` before Pi starts because of its AppArmor configuration.
 
 ## Optional Headroom JSON pilot
 
@@ -164,7 +175,7 @@ Use `agent_control(action="catalog", query="GPT 6 Astra")` to discover agent pro
 
 `background_agent` returns a short run ID immediately, leaving the parent free to continue. Writing profiles can declare `workspace: worktree`; Pi Core then provisions clean linked worktrees exclusively through [Worktrunk](https://worktrunk.dev/) and launches the child there. Install `wt` separately and keep it on `PATH` (for example, `cargo install worktrunk`). When the parent is inside a valid tmux pane, Pi Core opens a detached split containing the **actual interactive Pi TUI child**. Focus it with normal tmux navigation to observe, scroll, or interact with the child directly. Nested agents use the same backend selection, so an allowed child delegation opens another real pane. Outside tmux, or when pane launch fails before work starts, Pi Core preserves the isolated RPC backend.
 
-Every child gets a persistent Pi session named `agent:<profile>:<run-id>`. Its session header links to the direct parent session, and a non-context custom entry records validated lineage. The child starts with extension discovery disabled, the Pi Core subagent extension loaded by absolute path, skills and prompt templates disabled, and an explicit tool allowlist. Profile tools remain restrictive; Pi Core adds only `ask_parent` and, when the pinned child policy permits nesting, `background_agent` plus `agent_control`.
+Every child gets a persistent Pi session named `agent:<profile>:<run-id>`. Its session header links to the direct parent session, and a non-context custom entry records validated lineage. The child starts with extension discovery disabled, the Pi Core subagent and model-invisible axi-session lifecycle extensions loaded by absolute path, skills and prompt templates disabled, and an explicit tool allowlist. Profile tools remain restrictive; Pi Core adds only `ask_parent` and, when the pinned child policy permits nesting, `background_agent` plus `agent_control`.
 
 Parent/child control never uses pane keystrokes or captured terminal output. A private `0700` sidecar beneath `~/.pi/agent/pi-core/subagents/runs/` carries atomic, ownership-checked question, reply, steering, cancellation, exit, and final-result records. This means human typing, focus changes, scrolling, and TUI rendering cannot corrupt automatic delivery. Thinking, tool transcripts, and pane contents never enter the parent; only one immutable UTF-8-bounded final assistant handoff is pushed durably.
 
