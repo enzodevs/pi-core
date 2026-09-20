@@ -57,6 +57,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Bounded background processes** — watch finite CI gates or run persistent services with rotating searchable logs and direct TUI control.
 - **Interactive questions** — ask for bounded free text, one choice, or multiple choices without guessing.
 - **Temporary sudo** — approve each privileged command and enter a masked password that exists only in session memory.
+- **Opt-in personal WhatsApp retrieval** — pair a read-only Baileys client only when requested and expose bounded message references and local audio transcripts.
 - **Provider-scoped Fast mode** — injects `service_tier: "priority"` only for OAuth-backed `openai-codex` requests.
 - **Responsive minimal footer** — model, thinking, branch, context, cost, and extension state without render-time I/O.
 - **Interstellar theme** — a high-contrast deep-space palette, orbital π startup art, and a restrained animated working indicator.
@@ -93,6 +94,14 @@ pi install "$PWD"
 ```
 
 Pi Core stores mutable state under `~/.pi/agent/pi-core/`. It never modifies discovered skill files.
+
+## Personal WhatsApp retrieval
+
+The optional WhatsApp extension is off by default. Run `/wpp on` to activate its single model tool and connect through the unofficial Baileys WhatsApp Web client. On first use, Pi writes a private QR PNG beneath `~/.pi/agent/pi-core/whatsapp/` and opens it with `xdg-open`; scan it from WhatsApp's **Linked devices** screen. `/wpp status` reports connection and index counts, while `/wpp off` disconnects and removes the tool from the active model surface. Pairing credentials remain local with owner-only permissions.
+
+The tool is read-only and requires an explicit contact name, number fragment, or chat JID. Searches return at most 20 bounded records with opaque references. Audio transcription accepts at most five prior references, deletes downloaded media after processing, and uses a local `whisper` executable when available. `whisper-cli` is also supported when `PI_WPP_WHISPER_MODEL_PATH` names a local model; `PI_WPP_WHISPER_MODEL` selects the Python Whisper model and defaults to `base`. This machine currently needs a supported transcription CLI installed before audio transcription can run.
+
+WhatsApp controls linked-device history synchronization, so the local index contains only history delivered during pairing plus messages observed while connected. Baileys is unofficial and may break when WhatsApp changes its private protocol; use a pinned version and understand the account/terms risk. Pi Core never sends messages through this integration.
 
 ## Browser session isolation
 
