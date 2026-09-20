@@ -54,6 +54,8 @@
 	},
 	"scripts": {
 		"check": "npm run format:check && npm run typecheck && npm test && npm run fallow",
+		"compat:latest": "node scripts/compat-latest.mjs",
+		"compat:package": "node scripts/package-smoke.mjs",
 		"benchmark:fast": "node extensions/fast-mode/benchmark.mjs",
 		"headroom:install": "node extensions/json-headroom/setup.mjs",
 		"headroom:test": "node extensions/json-headroom/check.mjs",
@@ -71,10 +73,10 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.2.4",
-		"@earendil-works/pi-agent-core": "0.84.2",
-		"@earendil-works/pi-ai": "0.84.2",
-		"@earendil-works/pi-coding-agent": "^0.84.2",
-		"@earendil-works/pi-tui": "^0.84.2",
+		"@earendil-works/pi-agent-core": "0.86.1",
+		"@earendil-works/pi-ai": "0.86.1",
+		"@earendil-works/pi-coding-agent": "^0.86.1",
+		"@earendil-works/pi-tui": "^0.86.1",
 		"@types/node": "^24.0.0",
 		"fallow": "3.17.0",
 		"typebox": "^1.0.0",

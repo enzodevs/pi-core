@@ -384,6 +384,14 @@ Run `make help` to list the focused development targets. The Makefile is a thin,
 
 Run `make health` for advisory complexity and maintainability signals, or `make pack` to run required checks and inspect the package tarball contents. Both Fallow commands disable its cache and leave the working tree unchanged.
 
+Compatibility checks cover two additional boundaries:
+
+- The regular Vitest suite loads every configured extension through Pi's public extension loader and compiles an explicit public-API contract against the locked Pi dependencies.
+- `make compat-package` packs pi-core, installs the tarball into an isolated temporary project with the locked Pi version, and loads every packaged extension.
+- `make compat-latest` copies the repository to an isolated temporary directory, installs the latest published Pi packages, and runs type checking, tests, and a package dry run. It is intentionally opt-in because it requires network access and may expose an upstream breaking change before pi-core updates its lockfile.
+
+Set `PI_CORE_KEEP_COMPAT_TEMP=1` to preserve a compatibility command's temporary workspace for diagnosis.
+
 Runtime source is loaded directly by Pi's TypeScript loader. Package releases include only extensions, documentation, and the license.
 
 ## License

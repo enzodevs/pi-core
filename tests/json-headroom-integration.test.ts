@@ -17,8 +17,11 @@ describe.skipIf(!process.env.PI_CORE_HEADROOM_PYTHON)("real Headroom subprocess"
 				name: `service-${id}`,
 				description: "normal background service",
 			}));
-			rows[173]!.description = "CERT_RENEWAL_EXPIRED_173";
-			rows[217]!.description = "ROUTING_OVERRIDE_217";
+			const expired = rows.at(173);
+			const override = rows.at(217);
+			if (!expired || !override) throw new Error("integration fixture rows are missing");
+			expired.description = "CERT_RENEWAL_EXPIRED_173";
+			override.description = "ROUTING_OVERRIDE_217";
 			const text = JSON.stringify(rows, null, 2);
 			const event: ToolResultEvent = {
 				type: "tool_result",

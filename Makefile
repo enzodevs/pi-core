@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install format format-check typecheck test fallow health check pack clean headroom-install headroom-test
+.PHONY: help install format format-check typecheck test fallow health check pack compat-latest compat-package clean headroom-install headroom-test
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -37,6 +37,12 @@ check: ## Run all required verification
 
 pack: check ## Verify the published package contents
 	npm pack --dry-run
+
+compat-latest: ## Test in a temporary workspace against the latest Pi packages
+	npm run compat:latest
+
+compat-package: ## Pack, install, and load all extensions against the locked Pi version
+	npm run compat:package
 
 clean: ## Remove generated local artifacts
 	rm -rf coverage *.tgz .fallow

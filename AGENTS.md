@@ -14,6 +14,8 @@ Use the repository `Makefile` as the stable command interface:
 - `make health` — report advisory Fallow health findings
 - `make check` — run all required verification
 - `make pack` — verify checks and published package contents
+- `make compat-package` — install the packed package and load every extension through Pi
+- `make compat-latest` — test a temporary copy against the latest published Pi packages
 - `make help` — list available targets
 
 Keep implementation details in `package.json` scripts; Make targets should remain thin delegates so CI, agents, and contributors share one interface.
@@ -27,4 +29,5 @@ Keep implementation details in `package.json` scripts; Make targets should remai
 - Do not mutate skill files.
 - Follow `CONTEXT-HYGIENE.md` for every model-facing schema, prompt, and result.
 - Keep always-active tool surfaces minimal; bound variable output and return conclusions instead of transcripts.
-- A read-only checkout of Pi upstream is available at `/home/rrghost/.opensrc/repos/github.com/earendil-works/pi/main` for source-level API verification; still read the installed Pi docs first when working on Pi behavior.
+- Read the installed `@earendil-works/pi-coding-agent` docs and types first when working on Pi behavior; they match the runtime under test.
+- A read-only opensrc snapshot of Pi upstream is available at `/home/rrghost/.opensrc/repos/github.com/earendil-works/pi/main` for source-level API verification. Never modify it, and verify its `packages/coding-agent/package.json` version before treating it as version-matched—the snapshot may lag upstream or the installed package and may not include Git metadata.

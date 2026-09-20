@@ -115,7 +115,7 @@ describe("ask_parent parallel tool gate", () => {
 			const askCall = { type: "toolCall" as const, id: "ask-1", name: "ask_parent", arguments: {} };
 			const editCall = { type: "toolCall" as const, id: "edit-1", name: "edit", arguments: {} };
 			const calls = position === "before" ? [editCall, askCall] : [askCall, editCall];
-			const context: AgentContext = { systemPrompt: "", messages: [], tools: [askTool, editTool] };
+			const context: AgentContext = { messages: [], tools: [askTool, editTool] };
 			const config: AgentLoopConfig = {
 				model: model(),
 				convertToLlm: toLlm,
