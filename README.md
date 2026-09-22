@@ -254,7 +254,7 @@ Each process receives a short ID. Combined stdout/stderr is retained beneath `~/
 | `search` | Lexically search retained logs while a process is running or after it exits; returns at most 4 KiB of line-numbered context |
 | `stop` | Terminate a running process and its process group |
 
-Humans can use `/ps` to inspect session-owned processes and `/stop <id|all>` to terminate them directly from the TUI. State is persisted before terminal delivery, and pending results recover after reload. Active attached process trees stop on branch changes, `/quit`, and other session shutdowns; `service` mode is not OS-level daemonization, and commands that deliberately detach themselves are outside its ownership boundary. No polling model or unbounded log transcript enters context.
+Humans can use `/ps` (or `/ps <id>`) to open a live, keyboard-navigable process view with recent output; ↑/↓ selects a process and Esc closes it. The view refreshes once a second without adding its contents to model context. Use `/stop <id|all>` to terminate processes directly from the TUI. State is persisted before terminal delivery, and pending results recover after reload. Active attached process trees stop on branch changes, `/quit`, and other session shutdowns; `service` mode is not OS-level daemonization, and commands that deliberately detach themselves are outside its ownership boundary. No polling model or unbounded log transcript enters context.
 
 ## Ask the user
 

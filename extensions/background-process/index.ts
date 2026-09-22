@@ -13,6 +13,7 @@ import {
 	runBackgroundProcess,
 	truncateProcessText,
 } from "./process.js";
+import { showProcesses } from "./ui.js";
 
 const ENTRY_TYPE = "pi-core-background-process-run";
 const RESULT_TYPE = "pi-core-background-process-result";
@@ -549,29 +550,15 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("ps", {
-		description: "Show session-owned background processes",
+		description: "Browse session-owned background processes and live output",
 		handler: async (args, ctx) => {
 			const id = args.trim();
-			if (id) {
-				const run = runs.get(id);
-				ctx.ui.notify(
-					run ? detailedProcessStatus(run, false) : `Unknown process: ${id}`,
-					run ? "info" : "warning",
-				);
+			if (id && !runs.has(id)) {
+				ctx.ui.notify(`Unknown process: ${id}`, "warning");
 				return;
 			}
-			const recent = recentRuns();
-			ctx.ui.notify(
-				recent.length
-					? truncateProcessText(
-							recent
-								.map((run) => `${compactProcessStatus(run)}\n  ${commandSummary(run.command)}`)
-								.join("\n"),
-							MAX_STATUS_BYTES,
-						)
-					: "0 processes",
-				"info",
-			);
+			if (!ctx.hasUI) return;
+			await showProcesses(ctx, recentRuns, id || undefined);
 		},
 	});
 

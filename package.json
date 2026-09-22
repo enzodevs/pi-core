@@ -74,10 +74,10 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.2.4",
-		"@earendil-works/pi-agent-core": "0.86.1",
-		"@earendil-works/pi-ai": "0.86.1",
-		"@earendil-works/pi-coding-agent": "^0.86.1",
-		"@earendil-works/pi-tui": "^0.86.1",
+		"@earendil-works/pi-agent-core": "0.87.0",
+		"@earendil-works/pi-ai": "0.87.0",
+		"@earendil-works/pi-coding-agent": "^0.87.0",
+		"@earendil-works/pi-tui": "^0.87.0",
 		"@types/node": "^24.0.0",
 		"@types/qrcode": "1.5.6",
 		"fallow": "3.17.0",
@@ -86,7 +86,7 @@
 		"vitest": "^3.2.0"
 	},
 	"engines": {
-		"node": ">=20"
+		"node": ">=22.19.0"
 	},
 	"devEngines": {
 		"runtime": {
