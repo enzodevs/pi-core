@@ -7,7 +7,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expectTypeOf, it } from "vitest";
 import askUserQuestion from "../extensions/ask-user-question/index.js";
-import axiSession from "../extensions/axi-session/index.js";
 import backgroundProcess from "../extensions/background-process/index.js";
 import contextInspector from "../extensions/context-inspector/index.js";
 import draftToggle from "../extensions/draft-toggle/index.js";
@@ -27,7 +26,6 @@ import sudoExtension from "../extensions/sudo/index.js";
 
 const factories = [
 	askUserQuestion,
-	axiSession,
 	backgroundProcess,
 	contextInspector,
 	draftToggle,

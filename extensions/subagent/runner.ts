@@ -143,14 +143,11 @@ export function buildChildTools(agent: AgentConfig, lineage: ChildLineage): stri
 	return [...tools];
 }
 
-export const AXI_SESSION_EXTENSION_PATH = path.join(import.meta.dirname, "../axi-session/index.ts");
-
 export function buildChildArgs(
 	options: Pick<RunAgentOptions, "agent" | "ctx" | "lineage" | "model" | "thinking">,
 	systemPromptFile: string,
 	extensionPath = SUBAGENT_EXTENSION_PATH,
 	launch: { mode?: "rpc" | "tui"; sessionFile?: string; name?: string } = {},
-	axiSessionExtensionPath = AXI_SESSION_EXTENSION_PATH,
 ): string[] {
 	const args = launch.mode === "tui" ? [] : ["--mode", "rpc"];
 	if (launch.sessionFile) args.push("--session", path.resolve(launch.sessionFile));
@@ -159,8 +156,6 @@ export function buildChildArgs(
 		"--no-extensions",
 		"--extension",
 		path.resolve(extensionPath),
-		"--extension",
-		path.resolve(axiSessionExtensionPath),
 		"--no-skills",
 		"--no-prompt-templates",
 		"--no-approve",

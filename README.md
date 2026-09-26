@@ -40,13 +40,11 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 | Every skill inflates every prompt | Choose `full`, `name`, `searchable`, or `off` per working directory |
 | Old sessions are hard to inspect | Search transcripts and report cost, errors, models, and prompt patterns on demand |
 | Fast mode requires restarting or hidden config | Toggle priority processing live with `/fast` |
-| Browser agents collide on one automation session | Scope chrome-devtools-axi to the Pi session with no model-facing tool |
 | Context composition is opaque | Inspect prompt inputs and the last serialized provider payload with `/context` |
 | Tool catalogs grow without discipline | Enforce a written context-hygiene policy for schemas and outputs |
 
 ## Highlights
 
-- **Isolated browser sessions** — chrome-devtools-axi automatically follows the Pi session lifecycle without adding a tool schema or prompt.
 - **Model-invisible context inspector** — `/context` shows usage, prompt inputs, files, skills, tools, messages, and the last provider payload without creating a chat message or model-facing tool.
 - **Exact-CWD skill profiles** — sessions in the same directory share one visibility policy.
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
@@ -106,14 +104,6 @@ The optional WhatsApp extension is off by default. Run `/wpp on` to activate its
 The tool is read-only and requires an explicit contact name, number fragment, or chat JID. Searches return at most 20 bounded records with opaque references. Audio transcription accepts at most five prior references, deletes downloaded media after processing, and uses a local `whisper` executable when available. `whisper-cli` is also supported when `PI_WPP_WHISPER_MODEL_PATH` names a local model; `PI_WPP_WHISPER_MODEL` selects the Python Whisper model and defaults to `base`. This machine currently needs a supported transcription CLI installed before audio transcription can run.
 
 WhatsApp controls linked-device history synchronization, so the local index contains only history delivered during pairing plus messages observed while connected. Baileys is unofficial and may break when WhatsApp changes its private protocol; use a pinned version and understand the account/terms risk. Pi Core never sends messages through this integration.
-
-## Browser session isolation
-
-Pi Core assigns `CHROME_DEVTOOLS_AXI_SESSION` from an opaque hash of the current Pi session ID. Commands launched by Pi inherit the same value, so repeated chrome-devtools-axi calls share one browser while concurrent parent sessions and subagents do not share bridges, tabs, or stale-ref generations. Subagents explicitly load the same lifecycle extension and derive their own session value.
-
-The extension registers no model-facing tool, schema, prompt, or output transformation, and it does not start Chrome eagerly. On non-reload session shutdown it stops the matching bridge when that session has a PID file; `/reload` preserves the browser so work can continue afterward.
-
-Machine-specific Chrome launch policy remains outside the portable package. For example, this host exports `CHROME_DEVTOOLS_AXI_CHROME_ARGS="--no-sandbox"` before Pi starts because of its AppArmor configuration.
 
 ## Context inspector
 
@@ -199,7 +189,7 @@ Use `agent_control(action="catalog", query="GPT 6 Astra")` to discover agent pro
 
 `background_agent` returns a short run ID immediately, leaving the parent free to continue. Writing profiles can declare `workspace: worktree`; Pi Core then provisions clean linked worktrees exclusively through [Worktrunk](https://worktrunk.dev/) and launches the child there. Install `wt` separately and keep it on `PATH` (for example, `cargo install worktrunk`). When the parent is inside a valid tmux pane, Pi Core opens a detached split containing the **actual interactive Pi TUI child**. Focus it with normal tmux navigation to observe, scroll, or interact with the child directly. Nested agents use the same backend selection, so an allowed child delegation opens another real pane. Outside tmux, or when pane launch fails before work starts, Pi Core preserves the isolated RPC backend.
 
-Every child gets a persistent Pi session named `agent:<profile>:<run-id>`. Its session header links to the direct parent session, and a non-context custom entry records validated lineage. The child starts with extension discovery disabled, the Pi Core subagent and model-invisible axi-session lifecycle extensions loaded by absolute path, skills and prompt templates disabled, and an explicit tool allowlist. Profile tools remain restrictive; Pi Core adds only `ask_parent` and, when the pinned child policy permits nesting, `background_agent` plus `agent_control`.
+Every child gets a persistent Pi session named `agent:<profile>:<run-id>`. Its session header links to the direct parent session, and a non-context custom entry records validated lineage. The child starts with extension discovery disabled, the Pi Core subagent extension loaded by absolute path, skills and prompt templates disabled, and an explicit tool allowlist. Profile tools remain restrictive; Pi Core adds only `ask_parent` and, when the pinned child policy permits nesting, `background_agent` plus `agent_control`.
 
 Parent/child control never uses pane keystrokes or captured terminal output. A private `0700` sidecar beneath `~/.pi/agent/pi-core/subagents/runs/` carries atomic, ownership-checked question, reply, steering, cancellation, exit, and final-result records. This means human typing, focus changes, scrolling, and TUI rendering cannot corrupt automatic delivery. Thinking, tool transcripts, and pane contents never enter the parent; only one immutable UTF-8-bounded final assistant handoff is pushed durably.
 
