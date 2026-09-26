@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { readFileSync } from "node:fs";
 
 export const MAX_MEMORY_CONTEXT_BYTES = 1536;
 const MAX_MEMORY_HITS = 2;
@@ -51,11 +52,39 @@ function boundedUtf8(text: string, maxBytes: number): string {
 	return `${bytes.subarray(0, available).toString("utf8").replace(/�$/u, "")}${marker}`;
 }
 
-export function formatMemoryContext(hits: ReadonlyArray<MemoryHit>): string {
+function stripFrontmatter(text: string): string {
+	if (!text.startsWith("---\n")) return text;
+	const end = text.indexOf("\n---", 4);
+	return end === -1 ? text : text.slice(end + 4).replace(/^\n+/u, "");
+}
+
+type ReadText = (path: string) => string;
+
+const readMemoryFile: ReadText = (path) => readFileSync(path, "utf8");
+
+/**
+ * Search `text` is the matched chunk, which for a strong title match is often
+ * only the YAML frontmatter; prefer the memory file's body so the byte budget
+ * carries the fact itself.
+ */
+export function memoryBody(hit: MemoryHit, readText: ReadText = readMemoryFile): string {
+	if (hit.path) {
+		try {
+			const body = stripFrontmatter(readText(hit.path).trim()).trim();
+			if (body) return body;
+		} catch {}
+	}
+	return stripFrontmatter((hit.text ?? "").trim()).trim();
+}
+
+export function formatMemoryContext(
+	hits: ReadonlyArray<MemoryHit>,
+	readText: ReadText = readMemoryFile,
+): string {
 	const evidence = hits
 		.map((hit, index) => {
 			const title = hit.title ?? hit.heading ?? "Untitled memory";
-			const body = boundedUtf8((hit.text ?? "").trim(), MAX_HIT_TEXT_BYTES);
+			const body = boundedUtf8(memoryBody(hit, readText), MAX_HIT_TEXT_BYTES);
 			const source = hit.path ? `\nSource: ${hit.path}` : "";
 			return `${index + 1}. ${title}${source}\n${body}`.trim();
 		})
