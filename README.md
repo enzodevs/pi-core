@@ -95,6 +95,10 @@ pi install "$PWD"
 
 Pi Core stores mutable state under `~/.pi/agent/pi-core/`. It never modifies discovered skill files.
 
+## Personal Codex accounts (opt-in)
+
+`/codex-accounts` provides a keyboard-driven account switcher with on-demand 5-hour/weekly usage, separate private OAuth storage, and no model-facing tools or prompt injection. It is intentionally not auto-loaded. See [setup, security, and limitations](extensions/codex-accounts/README.md).
+
 ## Personal WhatsApp retrieval
 
 The optional WhatsApp extension is off by default. Run `/wpp on` to activate its single model tool and connect through the unofficial Baileys WhatsApp Web client. On first use, Pi writes a private QR PNG beneath `~/.pi/agent/pi-core/whatsapp/` and opens it with `xdg-open`; scan it from WhatsApp's **Linked devices** screen. `/wpp status` reports connection and index counts, while `/wpp off` disconnects and removes the tool from the active model surface. Pairing credentials remain local with owner-only permissions.

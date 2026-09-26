@@ -68,6 +68,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"peerDependencies": {
+		"@earendil-works/pi-ai": "^0.87.0",
 		"@earendil-works/pi-coding-agent": "*",
 		"@earendil-works/pi-tui": "*",
 		"typebox": "*"
@@ -79,6 +80,7 @@
 		"@earendil-works/pi-coding-agent": "^0.87.0",
 		"@earendil-works/pi-tui": "^0.87.0",
 		"@types/node": "^24.0.0",
+		"@types/proper-lockfile": "^4.1.4",
 		"@types/qrcode": "1.5.6",
 		"fallow": "3.17.0",
 		"typebox": "^1.0.0",
@@ -98,6 +100,7 @@
 	"dependencies": {
 		"@whiskeysockets/baileys": "6.7.24",
 		"pino": "9.14.0",
+		"proper-lockfile": "4.1.2",
 		"qrcode": "1.5.4"
 	}
 }

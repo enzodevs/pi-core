@@ -20,7 +20,10 @@ async function configuredExtensionPaths(): Promise<string[]> {
 
 describe("Pi extension compatibility", () => {
 	it("loads every configured extension through Pi's public loader", async () => {
-		const paths = await configuredExtensionPaths();
+		const paths = [
+			...(await configuredExtensionPaths()),
+			resolve(projectRoot, "extensions/codex-accounts/index.ts"),
+		];
 		expect(paths.length).toBeGreaterThan(0);
 
 		const agentDirectory = await mkdtemp(join(tmpdir(), "pi-core-loader-test-"));

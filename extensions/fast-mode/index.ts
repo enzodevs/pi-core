@@ -6,7 +6,7 @@ import { loadFastModeState, saveFastModeState, withPriorityServiceTier } from ".
 const STATUS_ID = "pi-core-fast-mode";
 
 function isOpenAICodex(ctx: ExtensionContext): boolean {
-	return ctx.model?.provider === "openai-codex";
+	return ctx.model?.api === "openai-codex-responses";
 }
 
 export default async function fastMode(pi: ExtensionAPI) {
