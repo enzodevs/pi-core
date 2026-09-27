@@ -30,6 +30,14 @@ import {
 } from "./runner.ts";
 import { createTmuxChildBridge } from "./tui-bridge.ts";
 import {
+	lifecycleSummary,
+	normalizeIntegration,
+	normalizeVerification,
+	type WorktreeIntegration,
+	WorktreeLifecycle,
+	type WorktreeVerification,
+} from "./worktree-lifecycle.ts";
+import {
 	discoverLegacyWorktrees,
 	formatReapResult,
 	type ReapResult,
@@ -80,6 +88,8 @@ const AgentControlParams = Type.Object({
 		Type.Literal("message"),
 		Type.Literal("reply"),
 		Type.Literal("stop"),
+		Type.Literal("verify"),
+		Type.Literal("integrate"),
 	]),
 	query: Type.Optional(
 		Type.String({
@@ -89,6 +99,12 @@ const AgentControlParams = Type.Object({
 	),
 	id: Type.Optional(Type.String({ maxLength: 32, description: "Direct child run ID" })),
 	message: Type.Optional(Type.String({ maxLength: limits.replyBytes, description: "Message or reply" })),
+	revision: Type.Optional(
+		Type.String({
+			pattern: "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+			description: "Exact reviewed commit SHA; required for integrate",
+		}),
+	),
 });
 
 const AskParentParams = Type.Object({
@@ -110,6 +126,8 @@ export interface ManagedRun {
 	worktreeBranch?: string;
 	worktreeCreated?: boolean;
 	workspaceSetup?: WorkspaceSetup;
+	verification?: WorktreeVerification;
+	integration?: WorktreeIntegration;
 	status: RunStatus;
 	activity: "starting" | "running" | "waiting";
 	delivery: DeliveryStatus;
@@ -179,6 +197,8 @@ export function snapshotRun(run: ManagedRun, transition = false): PersistedRun {
 		worktreeBranch: run.worktreeBranch,
 		worktreeCreated: run.worktreeCreated,
 		workspaceSetup: run.workspaceSetup,
+		verification: run.verification,
+		integration: run.integration,
 		status: run.status,
 		activity: run.activity,
 		delivery: run.delivery,
@@ -217,14 +237,21 @@ export function workspaceResultText(workspace: WorktreeWorkspace): string {
 
 function completionText(run: ManagedRun): string {
 	const body = run.status === "complete" ? run.output : run.error;
-	return truncateUtf8(`agent: ${run.agent}\nid: ${run.id}\nstatus: ${run.status}\n\n${body || "No output."}`);
+	return truncateUtf8(
+		`agent: ${run.agent}\nid: ${run.id}\nstatus: ${run.status}\n${lifecycleSummary(run.verification, run.integration)}\n\n${body || "No output."}`,
+	);
 }
 
 function compactStatus(run: ManagedRun): string {
 	const seconds = Math.max(0, Math.round(((run.finishedAt ?? Date.now()) - run.startedAt) / 1_000));
 	const state = run.status === "running" ? run.activity : run.status;
 	const backend = run.runtime?.backend === "tmux-tui" ? " pane" : "";
-	return `${run.id} ${run.agent} ${state}${backend} d${run.depth} ${seconds}s`;
+	const lifecycle = run.integration
+		? ` integrate:${run.integration.state}`
+		: run.verification
+			? ` verify:${run.verification.state}`
+			: "";
+	return `${run.id} ${run.agent} ${state}${backend} d${run.depth} ${seconds}s${lifecycle}`;
 }
 
 function childSettlement(ctx: ExtensionContext): { status: "complete" | "failed"; output: string } {
@@ -255,6 +282,11 @@ export function normalizePersistedRun(value: PersistedRun): PersistedRun | null 
 	) {
 		return null;
 	}
+	value = {
+		...value,
+		verification: normalizeVerification(value.verification),
+		integration: normalizeIntegration(value.integration),
+	};
 	const legacyTopLevel =
 		value.parentRunId === undefined &&
 		value.rootRunId === undefined &&
@@ -311,6 +343,11 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		limit: limits.globalConcurrency,
 	});
 	const worktreeLedger = new WorktreeLedger(worktreeLedgerPath);
+	const worktreeLifecycle = new WorktreeLifecycle({
+		ledger: worktreeLedger,
+		logRoot: path.join(path.dirname(worktreeLedgerPath), "checks"),
+	});
+	const lifecycleWork = new Map<string, { controller: AbortController; promise: Promise<void> }>();
 	let reaping: Promise<ReapResult> | undefined;
 	let currentCtx: ExtensionContext | undefined;
 	let branchGeneration = 0;
@@ -318,7 +355,9 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 
 	const updateStatus = () => {
 		if (!currentCtx) return;
-		const active = [...runs.values()].filter((run) => run.status === "running");
+		const active = [...runs.values()].filter(
+			(run) => run.status === "running" || run.verification?.state === "checking",
+		);
 		const waiting = active.filter((run) => run.activity === "waiting").length;
 		const text =
 			active.length > 0 ? `agents ${active.length}${waiting ? ` · ${waiting} waiting` : ""}` : undefined;
@@ -356,7 +395,16 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		// Pending results are the durable unread queue. Only trim terminal runs whose
 		// branch receipt has already acknowledged delivery.
 		const acknowledged = [...runs.values()]
-			.filter((run) => run.status !== "running" && run.delivery === "delivered")
+			.filter(
+				(run) =>
+					run.status !== "running" &&
+					run.delivery === "delivered" &&
+					!(
+						run.workspace === "worktree" &&
+						run.status === "complete" &&
+						run.integration?.state !== "integrated"
+					),
+			)
 			.sort((a, b) => b.startedAt - a.startedAt);
 		for (const run of acknowledged.slice(MAX_RECENT_RUNS)) runs.delete(run.id);
 	};
@@ -396,7 +444,9 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 					!run.deliveryQueued &&
 					!acknowledgeDelivery(run),
 			);
-		const hasRunningSibling = [...runs.values()].some((run) => run.status === "running");
+		const hasRunningSibling = [...runs.values()].some(
+			(run) => run.status === "running" || run.verification?.state === "checking",
+		);
 		const eligible = hasRunningSibling ? allPending.filter((run) => run.status !== "complete") : allPending;
 		if (eligible.length === 0) return;
 		const preamble =
@@ -491,22 +541,62 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			currentCtx?.ui.notify(`Agent ${run.id} is waiting for a reply; notification will retry.`, "warning");
 		}
 	};
-	const finish = (run: ManagedRun, status: RunStatus, body: string) => {
+	const withLifecycle = async (
+		run: ManagedRun,
+		operation: (signal: AbortSignal) => Promise<void>,
+		signal?: AbortSignal,
+	) => {
+		if (lifecycleWork.has(run.id))
+			throw new Error(`Run ${run.id} already has a lifecycle operation in progress.`);
+		const controller = new AbortController();
+		const combined = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
+		const promise = operation(combined).finally(() => {
+			lifecycleWork.delete(run.id);
+			updateStatus();
+		});
+		lifecycleWork.set(run.id, { controller, promise });
+		await promise;
+	};
+	const verifyRun = (run: ManagedRun, signal?: AbortSignal) =>
+		withLifecycle(
+			run,
+			async (operationSignal) => {
+				run.verification = { state: "checking", summary: "Running approved Worktrunk pre-merge checks." };
+				run.integration = undefined;
+				persist(run);
+				updateStatus();
+				const result = await worktreeLifecycle.verify(run.cwd, run.id, operationSignal);
+				if (!ownsRun(runs, run, branchGeneration)) return;
+				run.verification = result;
+				persist(run);
+			},
+			signal,
+		);
+	const finish = async (run: ManagedRun, status: RunStatus, body: string) => {
 		run.status = status;
 		run.finishedAt = Date.now();
 		run.child = undefined;
 		run.question = undefined;
-		run.delivery = "pending";
+		run.delivery = "none";
 		run.deliveryQueued = false;
 		if (status === "complete") run.output = truncateUtf8(body);
 		else run.error = truncateUtf8(body);
-		if (run.workspace === "worktree") {
-			void worktreeLedger
-				.markTerminal(run.id)
-				.then(reapInBackground)
-				.catch(() => undefined);
-		}
+		if (status === "complete" && run.workspace === "worktree")
+			run.verification = { state: "checking", summary: "Preparing automatic worktree verification." };
 		persist(run);
+		if (run.workspace === "worktree") {
+			try {
+				await worktreeLedger.markTerminal(run.id);
+				if (!ownsRun(runs, run, branchGeneration)) return;
+				if (status === "complete") await verifyRun(run);
+			} catch (error) {
+				run.verification = { state: "failed", summary: truncateUtf8(String(error), 1024) };
+			}
+		}
+		if (!ownsRun(runs, run, branchGeneration)) return;
+		run.delivery = "pending";
+		persist(run);
+		reapInBackground();
 		updateStatus();
 		deliverCompletions();
 		prune();
@@ -575,7 +665,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		void (async () => {
 			try {
 				const output = await start(options);
-				if (ownsRun(runs, run, generation)) finish(run, "complete", output);
+				if (ownsRun(runs, run, generation)) await finish(run, "complete", output);
 			} catch (error) {
 				if (error instanceof RunnerDetachedError) {
 					preserveLease = true;
@@ -583,7 +673,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				}
 				if (!ownsRun(runs, run, generation)) return;
 				const message = error instanceof Error ? error.message : String(error);
-				finish(run, message === "stopped" ? "stopped" : "failed", message);
+				await finish(run, message === "stopped" ? "stopped" : "failed", message);
 			} finally {
 				if (!preserveLease) {
 					try {
@@ -606,6 +696,10 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			run.child?.abort();
 		}
 		runs.clear();
+		if (lifecycleWork.size > 0) {
+			for (const work of lifecycleWork.values()) work.controller.abort();
+			await Promise.allSettled([...lifecycleWork.values()].map((work) => work.promise));
+		}
 		questionQueued.clear();
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
@@ -623,6 +717,26 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		}
 		const agents = discoverAgents(ctx.cwd, "user").agents;
 		for (const run of runs.values()) {
+			if (
+				run.verification?.state === "checking" ||
+				(run.workspace === "worktree" && run.status === "complete" && run.delivery === "none")
+			) {
+				run.verification = {
+					state: "interrupted",
+					summary: "Verification interrupted by session replacement; run verify again.",
+				};
+				run.delivery = "pending";
+				persist(run);
+			}
+			if (run.integration?.state === "integrating") {
+				run.integration = {
+					...run.integration,
+					state: "interrupted",
+					summary:
+						"Integration acknowledgement interrupted; retry integrate with the same revision to reconcile.",
+				};
+				persist(run);
+			}
 			if (run.status === "running" && run.question) {
 				run.question.delivered = questionPresent(run, run.question.id);
 				if (!run.question.delivered) deliverQuestion(run);
@@ -655,6 +769,16 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				run.delivery = "pending";
 				persist(run);
 			}
+			if (run.workspace === "worktree") {
+				try {
+					await worktreeLedger.markTerminal(run.id);
+				} catch {
+					currentCtx?.ui.notify(
+						`Could not reconcile worktree reservation for ${run.id}; lifecycle operations may need retrying.`,
+						"warning",
+					);
+				}
+			}
 			if (run.delivery === "pending" && !acknowledgeDelivery(run)) run.deliveryQueued = false;
 		}
 		deliverCompletions();
@@ -681,11 +805,13 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		deliverCompletions();
 		reapInBackground();
 		if (tuiBridge) {
-			const hasActiveChildren = [...runs.values()].some((run) => run.status === "running");
+			const hasActiveChildren = [...runs.values()].some(
+				(run) => run.status === "running" || run.verification?.state === "checking",
+			);
 			tuiBridge.settle(childSettlement(ctx), hasActiveChildren);
 		}
 	});
-	pi.on("session_shutdown", (event) => {
+	pi.on("session_shutdown", async (event) => {
 		branchGeneration++;
 		for (const run of runs.values()) {
 			if (event.reason === "reload" && run.runtime?.backend === "tmux-tui") run.child?.detach();
@@ -693,6 +819,10 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				run.cancelRequested = true;
 				run.child?.abort();
 			}
+		}
+		if (lifecycleWork.size > 0) {
+			for (const work of lifecycleWork.values()) work.controller.abort();
+			await Promise.allSettled([...lifecycleWork.values()].map((work) => work.promise));
 		}
 		tuiBridge?.shutdown(event.reason);
 		currentCtx = undefined;
@@ -917,9 +1047,13 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		name: "agent_control",
 		label: "Agent Control",
 		description:
-			"Discover agent profiles and available provider/model IDs with catalog, or status, steer, reply to, or stop a direct child.",
+			"Discover profiles/models, manage a direct child, retry worktree verification, or integrate its exact reviewed commit locally.",
+		promptGuidelines: [
+			"Use integrate only after reviewing the changes and when the user's task authorizes integration. It requires the exact verified revision; it never pushes remotely.",
+		],
 		parameters: AgentControlParams,
-		async execute(_toolCallId, params, _signal, _update, ctx) {
+		executionMode: "sequential",
+		async execute(_toolCallId, params, signal, _update, ctx) {
 			if (params.action === "catalog") {
 				const profiles = discoverAgents(ctx.cwd, "user").agents.filter(
 					(agent) => !childLineage || childLineage.allowedChildren.includes(agent.name),
@@ -937,7 +1071,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 					const result =
 						run.status === "running"
 							? compactStatus(run)
-							: `${compactStatus(run)}\n${run.output ?? run.error ?? ""}`;
+							: `${compactStatus(run)}\n${lifecycleSummary(run.verification, run.integration)}\n${run.output ?? run.error ?? ""}`;
 					return { content: [{ type: "text", text: truncateUtf8(result) }], details: {} };
 				}
 				const directRuns = [...runs.values()].filter((run) => ownsDirectChild(childLineage, run));
@@ -967,6 +1101,67 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			if (!params.id) throw new Error(`action=${params.action} requires id`);
 			const run = runs.get(params.id);
 			if (!run || !ownsDirectChild(childLineage, run)) throw new Error(`Unknown direct child: ${params.id}`);
+			if (params.action === "verify" || params.action === "integrate") {
+				if (run.status !== "complete" || run.workspace !== "worktree")
+					throw new Error("Only completed worktree runs support verification and integration.");
+				if (run.delivery === "none")
+					throw new Error(
+						"The child handoff is still finalizing; wait for completion before retrying lifecycle operations.",
+					);
+				if (params.action === "verify") await verifyRun(run, signal);
+				else {
+					if (childLineage) throw new Error("Only the top-level parent may integrate agent work.");
+					if (!params.revision)
+						throw new Error("integrate requires the exact reviewed revision from verification.");
+					const revision = params.revision;
+					if (run.verification?.state !== "passed" || run.verification.workspace?.head !== revision)
+						throw new Error(
+							"Integrate requires the exact reviewed revision from a passing verification receipt.",
+						);
+					await withLifecycle(
+						run,
+						async (operationSignal) => {
+							run.integration = {
+								state: "integrating",
+								head: revision,
+								target: run.verification?.workspace?.target ?? "",
+								summary: "Checking the verified revision before local integration.",
+							};
+							if (!persist(run)) {
+								run.integration = {
+									...run.integration,
+									state: "failed",
+									summary: "Cannot persist integration intent; no merge was started.",
+								};
+								throw new Error(run.integration.summary);
+							}
+							const result = await worktreeLifecycle.integrate(
+								run.cwd,
+								run.id,
+								run.verification,
+								revision,
+								operationSignal,
+							);
+							if (!ownsRun(runs, run, branchGeneration)) return;
+							run.integration = result;
+							persist(run);
+						},
+						signal,
+					);
+					reapInBackground();
+				}
+				return {
+					content: [{ type: "text", text: lifecycleSummary(run.verification, run.integration) }],
+					details: {},
+				};
+			}
+			if (params.action === "stop" && lifecycleWork.has(run.id)) {
+				lifecycleWork.get(run.id)?.controller.abort();
+				return {
+					content: [{ type: "text", text: `cancelling lifecycle operation for ${run.id}` }],
+					details: {},
+				};
+			}
 			if (run.status !== "running") throw new Error(`Run ${params.id} is ${run.status}`);
 			if (params.action === "stop") {
 				run.cancelRequested = true;

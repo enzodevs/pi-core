@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import lockfile from "proper-lockfile";
 import { type CommandRunner, prepareWorkspace, type WorktreeWorkspace } from "./worktrunk.ts";
 
@@ -107,6 +108,27 @@ export class WorktreeLedger {
 		return (await this.read()).entries;
 	}
 
+	/** Hold workspace ownership across verification/integration as well as cleanup. */
+	async withIdleWorktree<T>(
+		worktreePath: string,
+		runId: string,
+		operation: () => Promise<T>,
+		signal?: AbortSignal,
+	): Promise<T> {
+		return this.withLifecycleLock(async () => {
+			const entry = (await this.entries()).find((candidate) => candidate.path === canonical(worktreePath));
+			if (!entry?.runs.some((run) => run.id === runId && run.status === "terminal")) {
+				throw new Error("Worktree has no terminal reservation for this run.");
+			}
+			if (
+				entry.runs.some((run) => run.status === "running" && this.now() - run.recordedAt < ABANDONED_RUN_MS)
+			) {
+				throw new Error("Another agent is still using this worktree.");
+			}
+			return operation();
+		}, signal);
+	}
+
 	/** Re-read under the same cross-process lock used by workspace preparation and reservation. */
 	async reapEntry(
 		worktreePath: string,
@@ -132,16 +154,28 @@ export class WorktreeLedger {
 		);
 	}
 
-	private async withLifecycleLock<T>(operation: () => Promise<T>): Promise<T> {
+	private async withLifecycleLock<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+		signal?.throwIfAborted();
 		await fs.promises.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
-		// Separate from the short state-write lock so finishing runs can still update the ledger.
-		// Contention times out safely: launch callers release their lease and never spawn unreserved.
-		const release = await lockfile.lock(`${this.filePath}.lifecycle`, {
-			realpath: false,
-			stale: 30_000,
-			retries: { retries: 600, minTimeout: 20, maxTimeout: 1_000 },
-		});
+		// Keep state writes short and independently available to terminal callbacks. Retry the
+		// lifecycle lock with an abortable timer so reload/stop never waits out another parent's job.
+		const deadline = Date.now() + 10 * 60 * 1000;
+		let release: (() => Promise<void>) | undefined;
+		while (!release) {
+			signal?.throwIfAborted();
+			try {
+				release = await lockfile.lock(`${this.filePath}.lifecycle`, {
+					realpath: false,
+					stale: 30_000,
+					retries: 0,
+				});
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || Date.now() >= deadline) throw error;
+				await delay(100, undefined, { signal });
+			}
+		}
 		try {
+			signal?.throwIfAborted();
 			return await operation();
 		} finally {
 			await release();
@@ -266,7 +300,7 @@ export async function discoverLegacyWorktrees(options: {
 			item.is_main !== false ||
 			item.worktree?.detached !== false ||
 			typeof item.branch !== "string" ||
-			!/^pi-agent\/[a-z0-9-]+-[0-9a-f]{8}$/.test(item.branch)
+			!/^pi-agent\/[a-z0-9-]+-(?:[0-9a-f]{8}|[0-9a-f]{12})$/.test(item.branch)
 		)
 			return [];
 		const key = canonical(item.path);

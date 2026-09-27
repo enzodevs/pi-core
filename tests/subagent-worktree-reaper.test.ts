@@ -418,24 +418,27 @@ describe("worktree lifecycle coordination", () => {
 });
 
 describe("legacy worktree adoption", () => {
-	it("discovers only untracked linked worktrees with generated agent branch names", async () => {
-		const f = fixture();
-		const tracked = path.join(f.base, "tracked");
-		await f.ledger.record(tracked, "tracked-run", true);
-		const wt = runner(f.primary, [
-			item(f.worktree, { branch: "pi-agent/worker-abcd1234" }),
-			item(tracked, { branch: "pi-agent/worker-12345678" }),
-			item("/unrelated", { branch: "feature/user-work" }),
-			item("/not-generated", { branch: "pi-agent/custom" }),
-			item("/detached", { branch: null, worktree: { detached: true } }),
-			item("/primary", { branch: "pi-agent/worker-11223344", is_main: true }),
-		]);
-		expect(await discoverLegacyWorktrees({ ledger: f.ledger, run: wt.run, cwd: f.primary })).toEqual([
-			f.worktree,
-		]);
-		expect((await f.ledger.entries()).map((entry) => entry.path)).toEqual([tracked]);
-		expect(wt.removals()).toEqual([]);
-	});
+	it.each(["abcd1234", "0123456789ab"])(
+		"discovers generated agent branches with run ID %s, excluding unrelated worktrees",
+		async (id) => {
+			const f = fixture();
+			const tracked = path.join(f.base, "tracked");
+			await f.ledger.record(tracked, "tracked-run", true);
+			const wt = runner(f.primary, [
+				item(f.worktree, { branch: `pi-agent/worker-${id}` }),
+				item(tracked, { branch: "pi-agent/worker-12345678" }),
+				item("/unrelated", { branch: "feature/user-work" }),
+				item("/not-generated", { branch: "pi-agent/custom" }),
+				item("/detached", { branch: null, worktree: { detached: true } }),
+				item("/primary", { branch: "pi-agent/worker-11223344", is_main: true }),
+			]);
+			expect(await discoverLegacyWorktrees({ ledger: f.ledger, run: wt.run, cwd: f.primary })).toEqual([
+				f.worktree,
+			]);
+			expect((await f.ledger.entries()).map((entry) => entry.path)).toEqual([tracked]);
+			expect(wt.removals()).toEqual([]);
+		},
+	);
 
 	it("adopts confirmed paths without overwriting a newly active run", async () => {
 		const f = fixture();

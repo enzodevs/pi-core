@@ -28,13 +28,28 @@ function runnerFor(options: {
 	dirty?: boolean;
 	onWorktrunk?: (args: string[]) => void;
 	hookConfigured?: boolean;
+	hookApproved?: boolean;
 }): CommandRunner {
 	return async (command, args) => {
 		const joined = args.join(" ");
 		if (command === "wt") {
 			options.onWorktrunk?.(args);
-			if (joined.includes("hook pre-start --dry-run") && options.hookConfigured === false) {
-				return { stdout: "", stderr: "No pre-start hooks configured" };
+			if (joined.includes("hook show")) {
+				return {
+					stdout: JSON.stringify(
+						options.hookConfigured === false
+							? []
+							: [
+									{
+										type: "pre-start",
+										source: "project",
+										template: "make install",
+										needs_approval: options.hookApproved === false,
+									},
+								],
+					),
+					stderr: "",
+				};
 			}
 			return { stdout: "", stderr: "" };
 		}
@@ -176,6 +191,21 @@ describe("Worktrunk workspace policy", () => {
 			run: runnerFor({ root, worktree, hookConfigured: false }),
 		});
 		expect(result.setup).toBe("no_pre_start_hook");
+	});
+
+	it("refuses unapproved hooks instead of reporting skipped setup as complete", async () => {
+		const { root, worktree } = fixture();
+		const calls: string[][] = [];
+		await expect(
+			prepareWorkspace({
+				mode: "worktree",
+				cwd: root,
+				agent: "worker",
+				id: "abc12345",
+				run: runnerFor({ root, worktree, hookApproved: false, onWorktrunk: (args) => calls.push(args) }),
+			}),
+		).rejects.toThrow("hooks need user approval");
+		expect(calls.some((args) => args.includes("switch"))).toBe(false);
 	});
 
 	it("fails before Worktrunk when the primary checkout is dirty", async () => {

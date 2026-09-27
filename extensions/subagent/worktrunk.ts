@@ -29,6 +29,42 @@ export interface CommandResult {
 
 export type CommandRunner = (command: string, args: string[], cwd: string) => Promise<CommandResult>;
 
+interface WorktrunkHook {
+	type: string;
+	source: "user" | "project";
+	template: string;
+	needs_approval: boolean;
+	name?: string | null;
+}
+
+export async function readWorktrunkHooks(
+	cwd: string,
+	run: CommandRunner,
+	phase?: string,
+): Promise<WorktrunkHook[]> {
+	const result = await run(
+		"wt",
+		["-C", cwd, "hook", "show", ...(phase ? [phase] : []), "--format", "json"],
+		cwd,
+	);
+	const hooks: unknown = JSON.parse(result.stdout);
+	if (
+		!Array.isArray(hooks) ||
+		hooks.some(
+			(hook) =>
+				!hook ||
+				typeof hook.type !== "string" ||
+				(phase !== undefined && hook.type !== phase) ||
+				typeof hook.template !== "string" ||
+				!["user", "project"].includes(hook.source) ||
+				typeof hook.needs_approval !== "boolean",
+		)
+	) {
+		throw new Error("Unrecognized Worktrunk hook metadata; refusing unattended execution.");
+	}
+	return hooks as WorktrunkHook[];
+}
+
 export function defaultCommandRunner(command: string, args: string[], cwd: string): Promise<CommandResult> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
@@ -61,7 +97,8 @@ export function defaultCommandRunner(command: string, args: string[], cwd: strin
 			stderr = append(stderr, chunk);
 		});
 		child.on("error", (error) => finish(error));
-		child.on("exit", (code, signal) => {
+		// Wait for stdout/stderr to drain; exit can precede the final Git/Worktrunk output.
+		child.on("close", (code, signal) => {
 			if (code === 0) finish();
 			else finish(new Error(`${command} failed (${signal ?? code}): ${stderr.trim() || "no error output"}`));
 		});
@@ -155,10 +192,13 @@ export async function prepareWorkspace(options: {
 	const branch = worktreeBranch(options.agent, options.id);
 	let hookConfigured: boolean;
 	try {
-		const hookPreview = await run("wt", ["-C", root, "hook", "pre-start", "--dry-run"], root);
-		hookConfigured = !`${hookPreview.stdout}\n${hookPreview.stderr}`.includes(
-			"No pre-start hooks configured",
-		);
+		const hooks = await readWorktrunkHooks(root, run);
+		if (hooks.some((hook) => hook.needs_approval)) {
+			throw new Error(
+				"Worktrunk hooks need user approval. Review wt hook show and approve with wt config approvals add before launching a worktree agent.",
+			);
+		}
+		hookConfigured = hooks.some((hook) => hook.type === "pre-start");
 		await run("wt", ["-C", root, "switch", "--create", branch, "--base", "HEAD"], root);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
