@@ -3,10 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AuthInteraction } from "@earendil-works/pi-ai";
 import { BorderedLoader, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { showAccountPanel } from "./panel.js";
 import { fetchPiAccountUsage, type PiAccount, readPiAccount, resetPiAccount } from "./pi-account.js";
 import { AccountService, PERSONAL_PROVIDER } from "./service.js";
 import { AccountStore, normalizeLabel, PROVIDER } from "./store.js";
-import { type Usage, usageSummary } from "./usage.js";
+import type { Usage } from "./usage.js";
 
 function interaction(ctx: ExtensionContext, controller: AbortController): AuthInteraction {
 	return {
@@ -130,6 +131,7 @@ export default function codexAccounts(
 		busy = true;
 		try {
 			await refresh(ctx);
+			let focusKey: string | undefined;
 			while (true) {
 				const isActive = (a: { source: string; id: string }) =>
 					a.source === "pi"
@@ -137,24 +139,22 @@ export default function codexAccounts(
 						: ctx.model?.provider === PERSONAL_PROVIDER && selectedId === a.id;
 				const accounts = (await listAccounts()).sort((a, b) => Number(isActive(b)) - Number(isActive(a)));
 				const defaultId = await service.store.defaultAccount();
-				const rows = accounts.map((a, i) => {
-					const u = usage.get(`${a.source}:${a.id}`);
-					const active = isActive(a);
-					return `${i + 1}. ${active ? "●" : "○"} ${a.label}${active ? " (ativa)" : ""}${a.source === "vault" && a.id === defaultId ? " (padrão para novas sessões)" : ""} · ${typeof u === "object" ? usageSummary(u) : (u ?? "não consultado")}`;
+				const choice = await showAccountPanel(ctx, {
+					accounts: accounts.map((account) => ({
+						key: `${account.source}:${account.id}`,
+						label: account.label,
+						source: account.source,
+						active: isActive(account),
+						isDefault: account.source === "vault" && account.id === defaultId,
+						usage: usage.get(`${account.source}:${account.id}`),
+					})),
+					defaultId,
+					focusKey,
 				});
-				const add = "+ Adicionar conta";
-				const update = "↻ Atualizar limites";
-				const normal = "Usar login padrão do Pi";
-				const clearDefault = "Limpar conta padrão para novas sessões";
-				const choice = await ctx.ui.select("Contas Codex · ↑↓ navegar · Enter abrir · Esc sair", [
-					...rows,
-					add,
-					update,
-					normal,
-					...(defaultId ? [clearDefault] : []),
-				]);
 				if (!choice) return;
-				if (choice === clearDefault) {
+				focusKey = choice.accountKey;
+				const action = choice.action;
+				if (action === "clear-default") {
 					await service.store.setDefaultAccount(undefined);
 					ctx.ui.notify(
 						"Padrão removido. Novas sessões usarão a configuração normal do Pi. Sessões existentes não foram alteradas.",
@@ -162,11 +162,11 @@ export default function codexAccounts(
 					);
 					continue;
 				}
-				if (choice === update) {
+				if (action === "refresh") {
 					await refresh(ctx);
 					continue;
 				}
-				if (choice === add) {
+				if (action === "add") {
 					const label = await ctx.ui.input("Nome da conta (até 60 caracteres)", "Pessoal / Trabalho / Outra");
 					if (!label?.trim()) continue;
 					try {
@@ -190,39 +190,14 @@ export default function codexAccounts(
 					await refresh(ctx);
 					continue;
 				}
-				if (choice === normal) {
+				if (action === "pi-login") {
 					if (await usePiLogin(ctx)) return;
 					continue;
 				}
-				const account = accounts[rows.indexOf(choice)];
+				const account = accounts.find((item) => `${item.source}:${item.id}` === choice.accountKey);
 				if (!account) continue;
 				const u = usage.get(`${account.source}:${account.id}`);
-				const details =
-					typeof u === "object"
-						? `${u.windows
-								.map(
-									(w) =>
-										`${w.seconds === 604800 ? "Semana" : `${w.seconds / 3600}h`}: ${w.used}% usado; reset ${new Date(w.resetAt).toLocaleString()}`,
-								)
-								.join(
-									"\n",
-								)}\nResets disponíveis: ${u.availableResets ?? "não informado"}\nConsulta: ${new Date(u.checkedAt).toLocaleTimeString()}`
-						: (u ?? "Limites não consultados");
-				const resetAction = "Usar 1 crédito de reset";
-				const resetOptions = typeof u === "object" && (u.availableResets ?? 0) > 0 ? [resetAction] : [];
-				const action = await ctx.ui.select(
-					`${account.label}\n${details}${account.source === "pi" ? "\nVinculada ao login do Pi; tokens não copiados. Remoção via /logout." : ""}`,
-					account.source === "pi"
-						? ["Usar nesta sessão", ...resetOptions, "Renomear conta"]
-						: [
-								"Usar nesta sessão",
-								...resetOptions,
-								"Definir como padrão para novas sessões",
-								"Renomear conta",
-								"Remover conta",
-							],
-				);
-				if (action === resetAction && resetOptions.length) {
+				if (action === "reset" && typeof u === "object" && (u.availableResets ?? 0) > 0) {
 					if (
 						!(await ctx.ui.confirm(
 							"Usar 1 crédito de reset?",
@@ -253,7 +228,7 @@ export default function codexAccounts(
 					await refresh(ctx);
 					continue;
 				}
-				if (action === "Renomear conta") {
+				if (action === "rename") {
 					const label = await ctx.ui.input("Novo nome da conta (até 60 caracteres)", account.label);
 					if (label === undefined) continue;
 					let normalized: string;
@@ -272,19 +247,19 @@ export default function codexAccounts(
 					continue;
 				}
 				if (account.source === "pi") {
-					if (action === "Usar nesta sessão") {
+					if (action === "activate") {
 						if (getPiAccount()?.id !== account.id) {
 							ctx.ui.notify("O login padrão mudou. Confira a conta no menu atualizado.", "warning");
 						} else if (await usePiLogin(ctx)) return;
 					}
 					continue;
 				}
-				if (action === "Definir como padrão para novas sessões") {
+				if (action === "default") {
 					await service.store.setDefaultAccount(account.id);
 					ctx.ui.notify("Conta padrão salva. Apenas novas sessões Codex serão alteradas.", "info");
 					continue;
 				}
-				if (action === "Remover conta") {
+				if (action === "remove") {
 					if (account.id === selectedId) {
 						ctx.ui.notify("Troque para outra conta ou para o login padrão antes de remover.", "warning");
 						continue;
@@ -298,7 +273,7 @@ export default function codexAccounts(
 						await service.store.remove(account.id);
 						usage.delete(`vault:${account.id}`);
 					}
-				} else if (action === "Usar nesta sessão") {
+				} else if (action === "activate") {
 					if (!ctx.isIdle()) return;
 					if (!ctx.model || ![PROVIDER, PERSONAL_PROVIDER].includes(ctx.model.provider)) {
 						ctx.ui.notify("Selecione primeiro um modelo OpenAI Codex em /model.", "warning");

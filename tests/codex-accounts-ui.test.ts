@@ -9,10 +9,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import codexAccounts from "../extensions/codex-accounts/index.js";
+import { type AccountAction, showAccountPanel } from "../extensions/codex-accounts/panel.js";
 import type { PiAccount } from "../extensions/codex-accounts/pi-account.js";
 import { AccountService, PERSONAL_PROVIDER } from "../extensions/codex-accounts/service.js";
 import type { AccountStore } from "../extensions/codex-accounts/store.js";
 
+vi.mock("../extensions/codex-accounts/panel.js", () => ({ showAccountPanel: vi.fn() }));
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@earendil-works/pi-coding-agent")>()),
 	BorderedLoader: class {
@@ -80,92 +82,97 @@ function harness() {
 			getSessionFile: vi.fn((): string | undefined => undefined),
 		},
 	};
+	const panel = vi.mocked(showAccountPanel).mockReset().mockResolvedValue(undefined);
+	const choose = (action: AccountAction, index = 0) =>
+		panel.mockImplementationOnce(async (_ctx, state) => ({ action, accountKey: state.accounts[index]?.key }));
 	const open = () => pi.registerCommand.mock.calls[0]?.[1].handler("", ctx as unknown as ExtensionContext);
 	const start = (reason = "reload") =>
-		pi.on.mock.calls[0]?.[1]({ reason }, ctx as unknown as ExtensionContext);
-	return { pi, ctx, store, service, open, start, baseModel, getPiAccount };
-}
-
-describe("Codex TUI wiring", () => {
-	it("puts the active saved account first", async () => {
-		const { ctx, pi, start, open, baseModel } = harness();
+		pi.on.mock.calls.find(([event]) => event === "session_start")?.[1](
+			{ reason },
+			ctx as unknown as ExtensionContext,
+		);
+	const input = () =>
+		pi.on.mock.calls.find(([event]) => event === "input")?.[1]({}, ctx as unknown as ExtensionContext);
+	const saved = (id = "two") =>
 		ctx.sessionManager.getBranch.mockReturnValue([
 			{
 				type: "custom",
 				customType: "codex-account-selection",
-				data: { accountId: "two", modelId: baseModel.id },
+				data: { accountId: id, modelId: baseModel.id },
 			},
 		]);
-		await start();
-		ctx.model = { ...baseModel, provider: PERSONAL_PROVIDER };
-		ctx.ui.select.mockImplementationOnce(async (_title, rows) => {
-			expect(rows[0]).toContain("● Work (ativa)");
-			return undefined;
-		});
-		await open();
-		expect(pi.setModel).toHaveBeenCalledTimes(1);
-	});
-
-	it.each([false, true])("requires confirmation before reset (confirmed=%s)", async (confirmed) => {
-		const { ctx, service, open, pi } = harness();
-		vi.spyOn(service, "usage").mockResolvedValue({ windows: [], checkedAt: 1, availableResets: 1 });
-		const reset = vi.spyOn(service, "reset").mockResolvedValue("reset");
+	const loadUsage = (availableResets: number) => {
+		vi.spyOn(service, "usage").mockResolvedValue({ windows: [], checkedAt: 1, availableResets });
 		ctx.ui.custom.mockImplementation(async (factory) => {
 			await new Promise<void>((resolve) => {
 				factory({} as never, {} as never, {} as never, () => resolve());
 			});
 			return undefined;
 		});
+	};
+	return {
+		pi,
+		ctx,
+		store,
+		service,
+		open,
+		start,
+		input,
+		saved,
+		baseModel,
+		getPiAccount,
+		panel,
+		choose,
+		loadUsage,
+	};
+}
+
+describe("Codex dashboard wiring", () => {
+	it("opens with the active saved account first and browsing has no side effects", async () => {
+		const { ctx, pi, start, open, saved, panel, baseModel } = harness();
+		saved();
+		await start();
+		ctx.model = { ...baseModel, provider: PERSONAL_PROVIDER };
+		pi.setModel.mockClear();
+		await open();
+		expect(panel.mock.calls[0]?.[1].accounts[0]).toMatchObject({ key: "vault:two", active: true });
+		expect(pi.setModel).not.toHaveBeenCalled();
+	});
+
+	it.each([false, true])("requires confirmation before reset (confirmed=%s)", async (confirmed) => {
+		const { ctx, service, open, pi, choose, loadUsage } = harness();
+		loadUsage(1);
+		const reset = vi.spyOn(service, "reset").mockResolvedValue("reset");
 		ctx.ui.confirm.mockResolvedValue(confirmed);
-		ctx.ui.select
-			.mockImplementationOnce(async (_title, rows) => rows[0])
-			.mockImplementationOnce(async (_title, rows) => {
-				expect(rows).toContain("Usar 1 crédito de reset");
-				return "Usar 1 crédito de reset";
-			})
-			.mockResolvedValueOnce(undefined);
+		choose("reset");
 		await open();
 		expect(reset).toHaveBeenCalledTimes(confirmed ? 1 : 0);
 		if (confirmed) expect(reset).toHaveBeenCalledWith("one", expect.any(AbortSignal));
 		expect(pi.setModel).not.toHaveBeenCalled();
 	});
-
-	it("does not offer reset when no credits are reported", async () => {
-		const { ctx, open, service } = harness();
+	it("rejects reset actions when credits are unavailable", async () => {
+		const { choose, open, service, ctx } = harness();
 		const reset = vi.spyOn(service, "reset");
-		ctx.ui.select
-			.mockImplementationOnce(async (_title, rows) => rows[0])
-			.mockImplementationOnce(async (_title, rows) => {
-				expect(rows).not.toContain("Usar 1 crédito de reset");
-				return undefined;
-			})
-			.mockResolvedValueOnce(undefined);
+		choose("reset");
 		await open();
 		expect(reset).not.toHaveBeenCalled();
+		expect(ctx.ui.confirm).not.toHaveBeenCalled();
 	});
-
-	it("saves and clears defaults without switching the current session", async () => {
-		const { ctx, pi, store, open } = harness();
-		ctx.ui.select
-			.mockImplementationOnce(async (_title, rows) => rows[0])
-			.mockResolvedValueOnce("Definir como padrão para novas sessões")
-			.mockResolvedValueOnce(undefined);
+	it("saves and clears defaults without switching, retaining the focused tab", async () => {
+		const { ctx, pi, store, open, choose, panel } = harness();
+		choose("default", 1);
 		await open();
-		expect(store.setDefaultAccount).toHaveBeenCalledWith("one");
+		expect(store.setDefaultAccount).toHaveBeenCalledWith("two");
+		expect(panel.mock.calls[1]?.[1].focusKey).toBe("vault:two");
 		expect(pi.setModel).not.toHaveBeenCalled();
 		expect(pi.appendEntry).not.toHaveBeenCalled();
-		store.defaultAccount.mockResolvedValue("one");
-		ctx.ui.select
-			.mockImplementationOnce(async (_title, rows) => {
-				expect(rows[0]).toContain("padrão para novas sessões");
-				return "Limpar conta padrão para novas sessões";
-			})
-			.mockResolvedValueOnce(undefined);
+		store.defaultAccount.mockResolvedValue("two");
+		choose("clear-default");
 		await open();
 		expect(store.setDefaultAccount).toHaveBeenCalledWith(undefined);
-		expect(pi.setModel).not.toHaveBeenCalled();
+		expect(panel.mock.calls[2]?.[1].accounts[1]?.isDefault).toBe(true);
+		expect(ctx.ui.notify).toHaveBeenCalled();
 	});
-
 	it.each(["new", "startup"])("pins the default for a fresh %s session", async (reason) => {
 		const { store, start, pi, baseModel } = harness();
 		store.defaultAccount.mockResolvedValue("two");
@@ -178,40 +185,33 @@ describe("Codex TUI wiring", () => {
 			expect.objectContaining({ id: baseModel.id, provider: PERSONAL_PROVIDER }),
 		);
 	});
-
 	it.each(["read", "refresh", "select"])(
-		"blocks prompts when default activation fails at %s, until explicitly resolved",
+		"blocks failed default activation at %s until explicitly resolved",
 		async (failure) => {
-			const { store, start, pi, ctx, open } = harness();
+			const { store, start, pi, ctx, open, input, choose } = harness();
 			store.defaultAccount.mockResolvedValue("two");
 			if (failure === "read") store.defaultAccount.mockRejectedValueOnce(new Error("unreadable"));
 			if (failure === "refresh") ctx.modelRegistry.refresh.mockRejectedValueOnce(new Error("failed"));
 			if (failure === "select") pi.setModel.mockResolvedValueOnce(false);
 			await start("startup");
-			const input = () =>
-				pi.on.mock.calls.find(([event]) => event === "input")?.[1]({}, ctx as unknown as ExtensionContext);
 			expect(input()).toEqual({ action: "handled" });
 			const codex = ctx.model;
 			ctx.model = { ...codex, provider: "anthropic" };
 			expect(input()).toEqual({ action: "continue" });
 			ctx.model = codex;
-			ctx.ui.select.mockResolvedValueOnce("Usar login padrão do Pi");
+			choose("pi-login");
 			await open();
 			expect(input()).toEqual({ action: "continue" });
 		},
 	);
-
 	it("retains an unresolved default-read failure on reload", async () => {
-		const { start, pi, ctx } = harness();
+		const { start, ctx, input } = harness();
 		ctx.sessionManager.getBranch.mockReturnValue([
 			{ type: "custom", customType: "codex-account-selection", data: { defaultUnavailable: true } },
 		]);
-		await start("reload");
-		expect(
-			pi.on.mock.calls.find(([event]) => event === "input")?.[1]({}, ctx as unknown as ExtensionContext),
-		).toEqual({ action: "handled" });
+		await start();
+		expect(input()).toEqual({ action: "handled" });
 	});
-
 	it.each(["reload", "resume", "fork"])("does not apply defaults on %s", async (reason) => {
 		const { store, start, pi } = harness();
 		store.defaultAccount.mockResolvedValue("two");
@@ -219,8 +219,7 @@ describe("Codex TUI wiring", () => {
 		expect(store.defaultAccount).not.toHaveBeenCalled();
 		expect(pi.setModel).not.toHaveBeenCalled();
 	});
-
-	it("does not apply a default to a persisted startup session or another provider", async () => {
+	it("leaves persisted startup sessions and other providers alone", async () => {
 		const { store, start, ctx, pi } = harness();
 		store.defaultAccount.mockResolvedValue("two");
 		ctx.sessionManager.getSessionFile.mockReturnValue(import.meta.filename);
@@ -230,17 +229,10 @@ describe("Codex TUI wiring", () => {
 		expect(store.defaultAccount).not.toHaveBeenCalled();
 		expect(pi.setModel).not.toHaveBeenCalled();
 	});
-
-	it("restores a saved choice instead of the default", async () => {
-		const { store, start, ctx, pi, baseModel } = harness();
+	it("restores saved choices instead of the default", async () => {
+		const { store, start, pi, saved } = harness();
 		store.defaultAccount.mockResolvedValue("two");
-		ctx.sessionManager.getBranch.mockReturnValue([
-			{
-				type: "custom",
-				customType: "codex-account-selection",
-				data: { accountId: "one", modelId: baseModel.id },
-			},
-		]);
+		saved("one");
 		await start("startup");
 		expect(store.defaultAccount).not.toHaveBeenCalled();
 		expect(pi.setModel).toHaveBeenCalled();
@@ -250,7 +242,7 @@ describe("Codex TUI wiring", () => {
 	it.each(["switch", "restore"] as const)(
 		"awaits the real Pi auth snapshot before model selection (%s)",
 		async (operation) => {
-			const { ctx, pi, open, start, baseModel } = harness();
+			const { ctx, pi, open, start, choose, saved, baseModel } = harness();
 			const runtime = await ModelRuntime.create({
 				modelsPath: null,
 				refreshOnCreate: false,
@@ -270,8 +262,6 @@ describe("Codex TUI wiring", () => {
 			});
 			pi.unregisterProvider.mockImplementation((id) => runtime.unregisterProvider(id));
 			ctx.modelRegistry.refresh.mockImplementation((options) => registry.refresh(options));
-			// This is Pi's ExtensionAPI.setModel gate: it reads the cached snapshot
-			// before AgentSession.setModel can perform its async auth check.
 			pi.setModel.mockImplementation(async (model) => {
 				if (!runtime.hasConfiguredAuth(model.provider)) return false;
 				expect(await runtime.checkAuth(model.provider)).toBeDefined();
@@ -279,19 +269,10 @@ describe("Codex TUI wiring", () => {
 				return true;
 			});
 			if (operation === "switch") {
-				ctx.ui.select
-					.mockImplementationOnce(async (_title, rows) => rows[1])
-					.mockResolvedValueOnce("Usar nesta sessão")
-					.mockResolvedValueOnce(undefined);
+				choose("activate", 1);
 				await open();
 			} else {
-				ctx.sessionManager.getBranch.mockReturnValue([
-					{
-						type: "custom",
-						customType: "codex-account-selection",
-						data: { accountId: "two", modelId: baseModel.id },
-					},
-				]);
+				saved();
 				await start();
 			}
 			expect(immediatelyConfigured).toEqual([false]);
@@ -308,18 +289,15 @@ describe("Codex TUI wiring", () => {
 		},
 	);
 	it.each(["aborted", "error"])(
-		"does not select or persist an account when readiness refresh fails (%s)",
+		"does not select or persist an account when readiness fails (%s)",
 		async (failure) => {
-			const { ctx, pi, open } = harness();
+			const { ctx, pi, open, choose } = harness();
 			ctx.modelRegistry.refresh.mockResolvedValue({
 				aborted: failure === "aborted",
 				errors:
 					failure === "error" ? new Map([[PERSONAL_PROVIDER, new Error("SECRET_SERVER_BODY")]]) : new Map(),
 			});
-			ctx.ui.select
-				.mockImplementationOnce(async (_title, rows) => rows[0])
-				.mockResolvedValueOnce("Usar nesta sessão")
-				.mockResolvedValueOnce(undefined);
+			choose("activate");
 			await open();
 			expect(pi.setModel).not.toHaveBeenCalled();
 			expect(pi.appendEntry).not.toHaveBeenCalled();
@@ -327,99 +305,74 @@ describe("Codex TUI wiring", () => {
 			expect(JSON.stringify(ctx.ui.notify.mock.calls)).not.toContain("SECRET_SERVER_BODY");
 		},
 	);
-	it.each(["pi", "vault"] as const)(
-		"renames a %s account in place without changing auth/model",
-		async (source) => {
-			const { ctx, pi, store, open, getPiAccount } = harness();
-			if (source === "pi")
-				getPiAccount.mockReturnValue({ id: "existing", label: "Login padrão do Pi", source: "pi" });
-			ctx.ui.select
-				.mockImplementationOnce(async (_title, rows) => rows[0])
-				.mockResolvedValueOnce("Renomear conta")
-				.mockResolvedValueOnce(undefined);
-			ctx.ui.input.mockResolvedValue(" Admin Redapro ");
-			await open();
-			expect(store.rename).toHaveBeenCalledWith(
-				source === "pi" ? "existing" : "one",
-				"Admin Redapro",
-				source,
-			);
-			expect(ctx.ui.select.mock.calls[2]?.[1][0]).toContain("Admin Redapro");
-			if (source === "pi") expect(ctx.ui.select.mock.calls[2]?.[1][0]).toContain("● Admin Redapro (ativa)");
-			expect(pi.setModel).not.toHaveBeenCalled();
-			expect(pi.appendEntry).not.toHaveBeenCalled();
-		},
-	);
+	it.each(["pi", "vault"] as const)("renames a %s account without changing auth/model", async (source) => {
+		const { ctx, pi, store, open, getPiAccount, choose, panel } = harness();
+		if (source === "pi")
+			getPiAccount.mockReturnValue({ id: "existing", label: "Login padrão do Pi", source: "pi" });
+		choose("rename");
+		ctx.ui.input.mockResolvedValue(" Admin Redapro ");
+		await open();
+		expect(store.rename).toHaveBeenCalledWith(source === "pi" ? "existing" : "one", "Admin Redapro", source);
+		expect(panel.mock.calls[1]?.[1].accounts[0]?.label).toBe("Admin Redapro");
+		expect(panel.mock.calls[1]?.[1].focusKey).toBe(source === "pi" ? "pi:existing" : "vault:one");
+		expect(pi.setModel).not.toHaveBeenCalled();
+		expect(pi.appendEntry).not.toHaveBeenCalled();
+	});
 	it.each([undefined, "", "\u001b[31m", "x".repeat(61)])(
 		"does not persist a cancelled or invalid rename (%s)",
 		async (label) => {
-			const { ctx, store, open } = harness();
-			ctx.ui.select
-				.mockImplementationOnce(async (_title, rows) => rows[0])
-				.mockResolvedValueOnce("Renomear conta")
-				.mockResolvedValueOnce(undefined);
+			const { ctx, store, open, choose } = harness();
+			choose("rename");
 			ctx.ui.input.mockResolvedValue(label);
 			await open();
 			expect(store.rename).not.toHaveBeenCalled();
 		},
 	);
-	it("automatically lists the existing Pi login as active even with an empty vault", async () => {
-		const { ctx, pi, store, open, getPiAccount } = harness();
+	it("lists the existing Pi login as active with an empty vault", async () => {
+		const { pi, store, open, getPiAccount, panel } = harness();
 		store.list.mockResolvedValue([]);
 		getPiAccount.mockReturnValue({ id: "existing", label: "Login padrão do Pi", source: "pi" });
 		await open();
-		expect(ctx.ui.select.mock.calls[0]?.[1][0]).toContain("● Login padrão do Pi (ativa)");
+		expect(panel.mock.calls[0]?.[1].accounts).toEqual([
+			expect.objectContaining({ key: "pi:existing", active: true }),
+		]);
 		expect(pi.registerProvider).not.toHaveBeenCalled();
 		expect(pi.appendEntry).not.toHaveBeenCalled();
 		expect(store.remove).not.toHaveBeenCalled();
 	});
-	it("marks the default login inactive on another provider and lets the user switch back without copying tokens", async () => {
-		const { ctx, pi, open, getPiAccount, baseModel, store } = harness();
+	it("switches back to Pi login without copying tokens", async () => {
+		const { ctx, pi, open, getPiAccount, baseModel, store, choose, panel } = harness();
 		getPiAccount.mockReturnValue({ id: "existing", label: "Login padrão do Pi", source: "pi" });
 		ctx.model = { ...baseModel, provider: PERSONAL_PROVIDER };
-		ctx.ui.select
-			.mockImplementationOnce(async (_title, rows) => rows[0])
-			.mockResolvedValueOnce("Usar nesta sessão");
+		choose("activate");
 		await open();
-		expect(ctx.ui.select.mock.calls[0]?.[1][0]).toContain("○ Login padrão do Pi");
-		expect(ctx.ui.select.mock.calls[1]?.[1]).toEqual(["Usar nesta sessão", "Renomear conta"]);
+		expect(panel.mock.calls[0]?.[1].accounts[0]?.active).toBe(false);
 		expect(pi.setModel).toHaveBeenCalledWith(baseModel);
 		expect(pi.appendEntry).toHaveBeenCalledWith("codex-account-selection", { accountId: null });
 		expect(pi.registerProvider).not.toHaveBeenCalled();
 		expect(store.remove).not.toHaveBeenCalled();
 	});
-	it("does not mark a saved selection active when the current model uses the default login", async () => {
-		const { ctx, pi, open, start, getPiAccount, baseModel } = harness();
+	it("marks only the Pi login active when the current model uses normal auth", async () => {
+		const { open, start, getPiAccount, saved, panel } = harness();
 		getPiAccount.mockReturnValue({ id: "existing", label: "Login padrão do Pi", source: "pi" });
-		ctx.sessionManager.getBranch.mockReturnValue([
-			{
-				type: "custom",
-				customType: "codex-account-selection",
-				data: { accountId: "one", modelId: baseModel.id },
-			},
-		]);
+		saved("one");
 		await start();
-		pi.setModel.mockClear();
 		await open();
-		expect(ctx.ui.select.mock.calls[0]?.[1][0]).toContain("● Login padrão do Pi (ativa)");
-		expect(ctx.ui.select.mock.calls[0]?.[1][1]).toContain("○ Personal");
+		expect(panel.mock.calls[0]?.[1].accounts.map((a) => a.active)).toEqual([true, false, false]);
 	});
-	it("refuses to select a different default identity if auth.json changes while the menu is open", async () => {
-		const { ctx, pi, open, getPiAccount } = harness();
+	it("refuses a Pi identity changed while the panel was open", async () => {
+		const { ctx, pi, open, getPiAccount, panel } = harness();
 		getPiAccount.mockReturnValue({ id: "existing", label: "Login padrão do Pi", source: "pi" });
-		ctx.ui.select
-			.mockImplementationOnce(async (_title, rows) => rows[0])
-			.mockImplementationOnce(async () => {
-				getPiAccount.mockReturnValue({ id: "changed", label: "Login padrão do Pi", source: "pi" });
-				return "Usar nesta sessão";
-			})
-			.mockResolvedValueOnce(undefined);
+		panel.mockImplementationOnce(async (_ctx, state) => {
+			getPiAccount.mockReturnValue({ id: "changed", label: "Login padrão do Pi", source: "pi" });
+			return { action: "activate", accountKey: state.accounts[0]?.key };
+		});
 		await open();
 		expect(pi.setModel).not.toHaveBeenCalled();
 		expect(pi.appendEntry).not.toHaveBeenCalled();
 		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("login padrão mudou"), "warning");
 	});
-	it("excludes selection metadata from Pi's actual model context builder", () => {
+	it("excludes selection metadata from actual model context", () => {
 		const context = buildSessionContext([
 			{
 				type: "custom",
@@ -434,21 +387,19 @@ describe("Codex TUI wiring", () => {
 		expect(JSON.stringify(context)).not.toContain("private-account");
 	});
 	it("blocks mutation while streaming and is inert without UI", async () => {
-		const { ctx, open, store } = harness();
+		const { ctx, open, store, panel } = harness();
 		ctx.isIdle.mockReturnValue(false);
 		await open();
 		expect(store.list).not.toHaveBeenCalled();
-		expect(ctx.ui.notify).toHaveBeenCalled();
+		expect(panel).not.toHaveBeenCalled();
 		ctx.hasUI = false;
 		ctx.isIdle.mockReturnValue(true);
 		await open();
 		expect(store.list).not.toHaveBeenCalled();
 	});
-	it("switches only the session provider and stores no tokens in session state", async () => {
-		const { ctx, pi, open } = harness();
-		ctx.ui.select
-			.mockImplementationOnce(async (_title, rows) => rows[1])
-			.mockResolvedValueOnce("Usar nesta sessão");
+	it("switches only this session and stores no tokens", async () => {
+		const { ctx, pi, open, choose } = harness();
+		choose("activate", 1);
 		await open();
 		expect(pi.registerProvider).toHaveBeenCalledWith(expect.objectContaining({ id: PERSONAL_PROVIDER }));
 		expect(pi.setModel).toHaveBeenCalledWith(expect.objectContaining({ provider: PERSONAL_PROVIDER }));
@@ -457,36 +408,24 @@ describe("Codex TUI wiring", () => {
 			modelId: ctx.model.id,
 		});
 	});
-	it("rolls back provider registration if model switching fails", async () => {
-		const { ctx, pi, open } = harness();
-		ctx.ui.select
-			.mockImplementationOnce(async (_title, rows) => rows[0])
-			.mockResolvedValueOnce("Usar nesta sessão")
-			.mockResolvedValueOnce(undefined);
+	it("rolls back registration if switching fails", async () => {
+		const { pi, open, choose } = harness();
+		choose("activate");
 		pi.setModel.mockResolvedValue(false);
 		await open();
 		expect(pi.unregisterProvider).toHaveBeenCalledWith(PERSONAL_PROVIDER);
 		expect(pi.appendEntry).not.toHaveBeenCalled();
 	});
 	it("requires confirmation before removal", async () => {
-		const { ctx, store, open } = harness();
-		ctx.ui.select
-			.mockImplementationOnce(async (_title, rows) => rows[0])
-			.mockResolvedValueOnce("Remover conta")
-			.mockResolvedValueOnce(undefined);
+		const { ctx, store, open, choose } = harness();
+		choose("remove");
 		ctx.ui.confirm.mockResolvedValue(false);
 		await open();
 		expect(store.remove).not.toHaveBeenCalled();
 	});
-	it("restores selected identity after reload and clears it on switching sessions", async () => {
-		const { ctx, pi, start, baseModel } = harness();
-		ctx.sessionManager.getBranch.mockReturnValue([
-			{
-				type: "custom",
-				customType: "codex-account-selection",
-				data: { accountId: "two", modelId: baseModel.id },
-			},
-		]);
+	it("restores selected identity and clears it on switching sessions", async () => {
+		const { ctx, pi, start, baseModel, saved } = harness();
+		saved();
 		await start();
 		expect(pi.registerProvider).toHaveBeenCalledWith(expect.objectContaining({ id: PERSONAL_PROVIDER }));
 		expect(pi.setModel).toHaveBeenCalledWith(expect.objectContaining({ provider: PERSONAL_PROVIDER }));

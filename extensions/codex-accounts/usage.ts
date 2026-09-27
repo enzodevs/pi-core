@@ -126,11 +126,3 @@ export async function consumeReset(
 		throw new Error("Resposta de reset desconhecida.");
 	return code;
 }
-
-export function usageSummary(usage: Usage): string {
-	const describe = (seconds: number, label: string) => {
-		const w = usage.windows.find((item) => item.seconds === seconds);
-		return w ? `${label}: ${Math.round(100 - w.used)}% livre` : `${label}: não informado`;
-	};
-	return `${describe(18000, "5h")} · ${describe(604800, "semana")} · resets: ${usage.availableResets ?? "não informado"}`;
-}

@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import codexAccounts from "../extensions/codex-accounts/index.js";
 import { AccountService, PERSONAL_PROVIDER } from "../extensions/codex-accounts/service.js";
 import { AccountStore, PROVIDER } from "../extensions/codex-accounts/store.js";
-import { fetchUsage, parseUsage, usageSummary } from "../extensions/codex-accounts/usage.js";
+import { fetchUsage, parseUsage } from "../extensions/codex-accounts/usage.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -216,31 +216,29 @@ describe("Codex limits", () => {
 	it.each([0, 3])("shows the explicit available reset count (%s)", (available_count) => {
 		const usage = parseUsage({ rate_limit: {}, rate_limit_reset_credits: { available_count } });
 		expect(usage.availableResets).toBe(available_count);
-		expect(usageSummary(usage)).toContain(`resets: ${available_count}`);
 	});
 	it.each([undefined, null, -1, 1.5, "3", Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
 		"does not invent a reset count from missing/invalid metadata (%s)",
 		(available_count) => {
 			const usage = parseUsage({ rate_limit: {}, rate_limit_reset_credits: { available_count } });
 			expect(usage.availableResets).toBeUndefined();
-			expect(usageSummary(usage)).toContain("resets: não informado");
 		},
 	);
 	it("retains reset counts when quota windows are absent", () => {
 		const usage = parseUsage({ rate_limit_reset_credits: { available_count: 2 } });
 		expect(usage.windows).toEqual([]);
 		expect(usage.availableResets).toBe(2);
-		expect(usageSummary(usage)).toContain("semana: não informado");
 	});
 	it("identifies weekly limits by duration rather than window order", () => {
 		const usage = parseUsage({
 			rate_limit: { primary_window: window(604800), secondary_window: window(18000, 90) },
 		});
-		expect(usageSummary(usage)).toBe("5h: 10% livre · semana: 75% livre · resets: não informado");
+		expect(usage.windows.find((item) => item.seconds === 18000)?.used).toBe(90);
+		expect(usage.windows.find((item) => item.seconds === 604800)?.used).toBe(25);
 		expect(usage.windows[0]?.resetAt).toBe(1_900_000_000_000);
 	});
 	it("does not invent missing windows or accept malformed numbers", () => {
-		expect(usageSummary(parseUsage({ rate_limit: {} }))).toContain("semana: não informado");
+		expect(parseUsage({ rate_limit: {} }).windows).toEqual([]);
 		for (const data of [
 			null,
 			{},
