@@ -29,7 +29,7 @@ export interface CommandResult {
 
 export type CommandRunner = (command: string, args: string[], cwd: string) => Promise<CommandResult>;
 
-function defaultCommandRunner(command: string, args: string[], cwd: string): Promise<CommandResult> {
+export function defaultCommandRunner(command: string, args: string[], cwd: string): Promise<CommandResult> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "";

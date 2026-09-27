@@ -30,7 +30,14 @@ import {
 } from "./runner.ts";
 import { createTmuxChildBridge } from "./tui-bridge.ts";
 import {
-	prepareWorkspace,
+	discoverLegacyWorktrees,
+	formatReapResult,
+	type ReapResult,
+	reapIntegratedWorktrees,
+	WorktreeLedger,
+} from "./worktree-reaper.ts";
+import {
+	defaultCommandRunner,
 	type WorkspaceMode,
 	type WorkspaceSetup,
 	type WorktreeWorkspace,
@@ -47,6 +54,7 @@ const invalidLineage = rawLineage !== undefined && childLineage === null;
 const limits = childLineage?.limits ?? resolveSubagentLimits();
 const registryPath =
 	childLineage?.registryPath ?? path.join(getAgentDir(), "pi-core", "subagents", "concurrency.json");
+const worktreeLedgerPath = path.join(path.dirname(registryPath), "worktrees.json");
 
 const BackgroundAgentParams = Type.Object({
 	agent: Type.String({ maxLength: 64, description: "Named agent profile" }),
@@ -201,6 +209,12 @@ function workspaceSetupText(workspace: WorktreeWorkspace): string {
 	return "inherited workspace";
 }
 
+/** Model-facing start summary; the cleanup line tells the parent not to remove worktrees itself. */
+export function workspaceResultText(workspace: WorktreeWorkspace): string {
+	if (workspace.mode !== "worktree") return "inherited cwd";
+	return `Worktrunk worktree${workspace.branch ? ` (${workspace.branch})` : ""}\nsetup: ${workspaceSetupText(workspace)}\ncleanup: automatic once integrated and clean`;
+}
+
 function completionText(run: ManagedRun): string {
 	const body = run.status === "complete" ? run.output : run.error;
 	return truncateUtf8(`agent: ${run.agent}\nid: ${run.id}\nstatus: ${run.status}\n\n${body || "No output."}`);
@@ -296,6 +310,8 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		filePath: registryPath,
 		limit: limits.globalConcurrency,
 	});
+	const worktreeLedger = new WorktreeLedger(worktreeLedgerPath);
+	let reaping: Promise<ReapResult> | undefined;
 	let currentCtx: ExtensionContext | undefined;
 	let branchGeneration = 0;
 	let questionOpen = false;
@@ -320,6 +336,21 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			currentCtx?.ui.notify(`Could not persist agent ${run.id} state.`, "warning");
 			return false;
 		}
+	};
+	// Only the top-level parent reaps; nested parents record into the same ledger.
+	const reapWorktrees = (): Promise<ReapResult> =>
+		(reaping ??= reapIntegratedWorktrees({ ledger: worktreeLedger, run: defaultCommandRunner }).finally(
+			() => {
+				reaping = undefined;
+			},
+		));
+	const reapInBackground = () => {
+		if (childLineage || reaping) return;
+		void reapWorktrees()
+			.then((result) => {
+				if (result.removed.length > 0) currentCtx?.ui.notify(formatReapResult(result), "info");
+			})
+			.catch(() => undefined);
 	};
 	const prune = () => {
 		// Pending results are the durable unread queue. Only trim terminal runs whose
@@ -469,6 +500,12 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		run.deliveryQueued = false;
 		if (status === "complete") run.output = truncateUtf8(body);
 		else run.error = truncateUtf8(body);
+		if (run.workspace === "worktree") {
+			void worktreeLedger
+				.markTerminal(run.id)
+				.then(reapInBackground)
+				.catch(() => undefined);
+		}
 		persist(run);
 		updateStatus();
 		deliverCompletions();
@@ -629,6 +666,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		currentCtx = ctx;
 		tuiBridge?.start(ctx);
 		await restoreActiveBranch(ctx, "Parent session restarted before completion.", true);
+		reapInBackground();
 	});
 	pi.on("session_tree", async (_event, ctx) => {
 		currentCtx = ctx;
@@ -641,6 +679,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			run.deliveryQueued = false;
 		}
 		deliverCompletions();
+		reapInBackground();
 		if (tuiBridge) {
 			const hasActiveChildren = [...runs.values()].some((run) => run.status === "running");
 			tuiBridge.settle(childSettlement(ctx), hasActiveChildren);
@@ -696,6 +735,45 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 	const mayManageChildren =
 		!childLineage || (childLineage.allowedChildren.length > 0 && childLineage.depth < limits.maxDepth);
 	if (!mayManageChildren) return;
+
+	if (!childLineage) {
+		pi.registerCommand("worktrees-clean", {
+			description: "Remove agent worktrees whose work is already integrated and clean",
+			handler: async (args, ctx) => {
+				try {
+					if (args.trim() && args.trim() !== "--adopt") {
+						ctx.ui.notify("Usage: /worktrees-clean [--adopt]", "warning");
+						return;
+					}
+					if (args.trim() === "--adopt") {
+						if (!ctx.hasUI) throw new Error("Legacy worktree adoption requires interactive confirmation.");
+						const candidates = await discoverLegacyWorktrees({
+							ledger: worktreeLedger,
+							run: defaultCommandRunner,
+							cwd: ctx.cwd,
+						});
+						if (candidates.length === 0) {
+							ctx.ui.notify("No untracked pi-agent worktrees found in this repository.", "info");
+						} else {
+							const batch = candidates.slice(0, 20);
+							const approved = await ctx.ui.confirm(
+								"Adopt legacy agent worktrees?",
+								`Enable automatic cleanup for these ${batch.length} of ${candidates.length} untracked pi-agent worktrees? Only integrated, clean, idle worktrees will be removed.\n${batch.join("\n")}`,
+							);
+							if (!approved) return;
+							await worktreeLedger.adopt(batch);
+						}
+					}
+					ctx.ui.notify(formatReapResult(await reapWorktrees()), "info");
+				} catch (error) {
+					ctx.ui.notify(
+						`Worktree cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+						"warning",
+					);
+				}
+			},
+		});
+	}
 
 	pi.registerTool({
 		name: "background_agent",
@@ -764,7 +842,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			const workspaceMode = params.workspace ?? agent.workspace ?? "inherit";
 			let workspace: WorktreeWorkspace;
 			try {
-				workspace = await prepareWorkspace({
+				workspace = await worktreeLedger.prepareWorkspace({
 					mode: workspaceMode,
 					cwd: requestedCwd,
 					agent: agent.name,
@@ -796,6 +874,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 			runs.set(id, run);
 			persist(run);
 			updateStatus();
+			if (workspace.mode === "worktree") reapInBackground();
 
 			const workspaceAgent =
 				workspace.mode === "worktree"
@@ -809,10 +888,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 				thinking: params.thinking,
 			});
 
-			const workspaceText =
-				workspace.mode === "worktree"
-					? `Worktrunk worktree${workspace.branch ? ` (${workspace.branch})` : ""}\nsetup: ${workspaceSetupText(workspace)}`
-					: "inherited cwd";
+			const workspaceText = workspaceResultText(workspace);
 			const policySource = params.workspace
 				? "call override"
 				: agent.workspaceSource
