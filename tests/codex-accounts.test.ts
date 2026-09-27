@@ -24,6 +24,30 @@ function credential(id = "one", expires = Date.now() + 3_600_000): OAuthCredenti
 }
 
 describe("personal Codex vault", () => {
+	it("persists defaults across stores and clears them on removal", async () => {
+		const { store, directory } = await fixture();
+		expect(await store.defaultAccount()).toBeUndefined();
+		await store.add("One", credential());
+		await store.setDefaultAccount("one");
+		expect(await new AccountStore(directory).defaultAccount()).toBe("one");
+		await expect(store.setDefaultAccount("missing")).rejects.toThrow("removida");
+		expect(await store.defaultAccount()).toBe("one");
+		await store.setDefaultAccount(undefined);
+		expect(await store.defaultAccount()).toBeUndefined();
+		await store.setDefaultAccount("one");
+		await store.remove("one");
+		expect(await store.defaultAccount()).toBeUndefined();
+	});
+
+	it("rejects malformed default references", async () => {
+		const { store, directory } = await fixture();
+		await writeFile(
+			join(directory, "accounts.json"),
+			JSON.stringify({ version: 1, accounts: [], defaultAccountId: 12 }),
+		);
+		await expect(store.defaultAccount()).rejects.toThrow("padrão inválida");
+	});
+
 	it("renames saved accounts without changing their credentials", async () => {
 		const { store, directory } = await fixture();
 		const original = credential();
@@ -272,5 +296,5 @@ it("registers only user controls and session-state restoration, no model-facing 
 	codexAccounts(pi as unknown as ExtensionAPI);
 	expect(pi.registerCommand).toHaveBeenCalledWith("codex-accounts", expect.any(Object));
 	expect(pi.registerShortcut).toHaveBeenCalledWith("ctrl+alt+a", expect.any(Object));
-	expect(pi.on.mock.calls.map(([event]) => event)).toEqual(["session_start"]);
+	expect(pi.on.mock.calls.map(([event]) => event)).toEqual(["session_start", "input"]);
 });

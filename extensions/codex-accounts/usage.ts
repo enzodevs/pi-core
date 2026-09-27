@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 export interface UsageWindow {
 	seconds: number;
 	used: number;
@@ -70,6 +72,10 @@ export async function fetchUsage(
 				: `Limites indisponíveis (HTTP ${response.status}).`,
 		);
 	}
+	return parseUsage(await readJson(response));
+}
+
+async function readJson(response: Response): Promise<unknown> {
 	const reader = response.body?.getReader();
 	if (!reader) throw new Error("Limites indisponíveis: resposta vazia.");
 	const chunks: Uint8Array[] = [];
@@ -82,11 +88,43 @@ export async function fetchUsage(
 			if (size > 128 * 1024) throw new Error("Resposta de limites grande demais.");
 			chunks.push(value);
 		}
-		return parseUsage(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+		return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 	} finally {
 		await reader.cancel();
 		reader.releaseLock();
 	}
+}
+
+export type ResetCode = "reset" | "nothing_to_reset" | "no_credit" | "already_redeemed";
+
+/** One explicit redemption only; never automatically retry an ambiguous POST. */
+export async function consumeReset(
+	access: string,
+	accountId: string,
+	signal: AbortSignal,
+	request: typeof fetch = fetch,
+): Promise<ResetCode> {
+	const response = await request("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume", {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${access}`,
+			"ChatGPT-Account-Id": accountId,
+			"User-Agent": "codex-cli",
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ redeem_request_id: randomUUID() }),
+		signal,
+		redirect: "error",
+	});
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error("Reset não confirmado.");
+	}
+	const value = (await readJson(response)) as { code?: unknown } | null;
+	const code = value?.code;
+	if (code !== "reset" && code !== "nothing_to_reset" && code !== "no_credit" && code !== "already_redeemed")
+		throw new Error("Resposta de reset desconhecida.");
+	return code;
 }
 
 export function usageSummary(usage: Usage): string {

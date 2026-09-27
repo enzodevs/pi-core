@@ -1,7 +1,7 @@
 import { type AuthInteraction, createModels, type OAuthAuth, type Provider } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { type AccountStore, PROVIDER } from "./store.js";
-import { fetchUsage } from "./usage.js";
+import { consumeReset, fetchUsage } from "./usage.js";
 
 export const PERSONAL_PROVIDER = "codex-accounts";
 
@@ -45,6 +45,11 @@ export class AccountService {
 	async usage(id: string, signal: AbortSignal) {
 		const auth = await this.auth(id, signal);
 		return fetchUsage(auth.auth.apiKey as string, id, signal);
+	}
+
+	async reset(id: string, signal: AbortSignal) {
+		const auth = await this.auth(id, signal);
+		return consumeReset(auth.auth.apiKey as string, id, signal);
 	}
 
 	/** Separate provider ID avoids touching or refreshing Pi's default auth.json credentials. */

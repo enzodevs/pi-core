@@ -1,8 +1,9 @@
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AuthInteraction } from "@earendil-works/pi-ai";
 import { BorderedLoader, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { fetchPiAccountUsage, type PiAccount, readPiAccount } from "./pi-account.js";
+import { fetchPiAccountUsage, type PiAccount, readPiAccount, resetPiAccount } from "./pi-account.js";
 import { AccountService, PERSONAL_PROVIDER } from "./service.js";
 import { AccountStore, normalizeLabel, PROVIDER } from "./store.js";
 import { type Usage, usageSummary } from "./usage.js";
@@ -46,6 +47,7 @@ export default function codexAccounts(
 	getPiAccount: () => PiAccount | undefined = readPiAccount,
 ): void {
 	let selectedId: string | undefined;
+	let selectionUnavailable = false;
 	let busy = false;
 	const usage = new Map<string, Usage | string>();
 	const refreshAccountProvider = async (ctx: ExtensionContext) => {
@@ -81,6 +83,7 @@ export default function codexAccounts(
 			}
 		}
 		selectedId = undefined;
+		selectionUnavailable = false;
 		pi.appendEntry("codex-account-selection", { accountId: null });
 		pi.unregisterProvider(PERSONAL_PROVIDER);
 		return true;
@@ -128,25 +131,37 @@ export default function codexAccounts(
 		try {
 			await refresh(ctx);
 			while (true) {
-				const accounts = await listAccounts();
+				const isActive = (a: { source: string; id: string }) =>
+					a.source === "pi"
+						? ctx.model?.provider === PROVIDER
+						: ctx.model?.provider === PERSONAL_PROVIDER && selectedId === a.id;
+				const accounts = (await listAccounts()).sort((a, b) => Number(isActive(b)) - Number(isActive(a)));
+				const defaultId = await service.store.defaultAccount();
 				const rows = accounts.map((a, i) => {
 					const u = usage.get(`${a.source}:${a.id}`);
-					const active =
-						a.source === "pi"
-							? ctx.model?.provider === PROVIDER
-							: ctx.model?.provider === PERSONAL_PROVIDER && selectedId === a.id;
-					return `${i + 1}. ${active ? "●" : "○"} ${a.label}${active ? " (ativa)" : ""} · ${typeof u === "object" ? usageSummary(u) : (u ?? "não consultado")}`;
+					const active = isActive(a);
+					return `${i + 1}. ${active ? "●" : "○"} ${a.label}${active ? " (ativa)" : ""}${a.source === "vault" && a.id === defaultId ? " (padrão para novas sessões)" : ""} · ${typeof u === "object" ? usageSummary(u) : (u ?? "não consultado")}`;
 				});
 				const add = "+ Adicionar conta";
 				const update = "↻ Atualizar limites";
 				const normal = "Usar login padrão do Pi";
+				const clearDefault = "Limpar conta padrão para novas sessões";
 				const choice = await ctx.ui.select("Contas Codex · ↑↓ navegar · Enter abrir · Esc sair", [
 					...rows,
 					add,
 					update,
 					normal,
+					...(defaultId ? [clearDefault] : []),
 				]);
 				if (!choice) return;
+				if (choice === clearDefault) {
+					await service.store.setDefaultAccount(undefined);
+					ctx.ui.notify(
+						"Padrão removido. Novas sessões usarão a configuração normal do Pi. Sessões existentes não foram alteradas.",
+						"info",
+					);
+					continue;
+				}
 				if (choice === update) {
 					await refresh(ctx);
 					continue;
@@ -193,12 +208,51 @@ export default function codexAccounts(
 									"\n",
 								)}\nResets disponíveis: ${u.availableResets ?? "não informado"}\nConsulta: ${new Date(u.checkedAt).toLocaleTimeString()}`
 						: (u ?? "Limites não consultados");
+				const resetAction = "Usar 1 crédito de reset";
+				const resetOptions = typeof u === "object" && (u.availableResets ?? 0) > 0 ? [resetAction] : [];
 				const action = await ctx.ui.select(
 					`${account.label}\n${details}${account.source === "pi" ? "\nVinculada ao login do Pi; tokens não copiados. Remoção via /logout." : ""}`,
 					account.source === "pi"
-						? ["Usar nesta sessão", "Renomear conta"]
-						: ["Usar nesta sessão", "Renomear conta", "Remover conta"],
+						? ["Usar nesta sessão", ...resetOptions, "Renomear conta"]
+						: [
+								"Usar nesta sessão",
+								...resetOptions,
+								"Definir como padrão para novas sessões",
+								"Renomear conta",
+								"Remover conta",
+							],
 				);
+				if (action === resetAction && resetOptions.length) {
+					if (
+						!(await ctx.ui.confirm(
+							"Usar 1 crédito de reset?",
+							`${account.label}: consome um crédito disponível para restaurar limites elegíveis. Não pode ser desfeito. Continuar?`,
+						))
+					)
+						continue;
+					if (!ctx.isIdle()) return;
+					try {
+						const signal = AbortSignal.timeout(15_000);
+						const result =
+							account.source === "pi"
+								? await resetPiAccount(account.id, ctx.modelRegistry, signal)
+								: await service.reset(account.id, signal);
+						const messages = {
+							reset: "Reset aplicado.",
+							nothing_to_reset: "Nenhum limite elegível para reset.",
+							no_credit: "Nenhum crédito de reset disponível.",
+							already_redeemed: "Esta solicitação já foi processada.",
+						};
+						ctx.ui.notify(messages[result], "info");
+					} catch {
+						ctx.ui.notify(
+							"Reset não confirmado; pode ter sido aplicado. Confira os limites antes de tentar novamente. Nenhuma repetição automática foi feita.",
+							"warning",
+						);
+					}
+					await refresh(ctx);
+					continue;
+				}
 				if (action === "Renomear conta") {
 					const label = await ctx.ui.input("Novo nome da conta (até 60 caracteres)", account.label);
 					if (label === undefined) continue;
@@ -223,6 +277,11 @@ export default function codexAccounts(
 							ctx.ui.notify("O login padrão mudou. Confira a conta no menu atualizado.", "warning");
 						} else if (await usePiLogin(ctx)) return;
 					}
+					continue;
+				}
+				if (action === "Definir como padrão para novas sessões") {
+					await service.store.setDefaultAccount(account.id);
+					ctx.ui.notify("Conta padrão salva. Apenas novas sessões Codex serão alteradas.", "info");
 					continue;
 				}
 				if (action === "Remover conta") {
@@ -257,6 +316,7 @@ export default function codexAccounts(
 						await refreshAccountProvider(ctx);
 						if (!(await pi.setModel(model))) throw new Error("Unavailable");
 						selectedId = account.id;
+						selectionUnavailable = false;
 						pi.appendEntry("codex-account-selection", { accountId: account.id, modelId: model.id });
 					} catch {
 						if (previous) pi.registerProvider(service.provider(previous));
@@ -285,17 +345,38 @@ export default function codexAccounts(
 	};
 
 	// Custom entries are extension state, excluded from model context by Pi.
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
 		if (selectedId) pi.unregisterProvider(PERSONAL_PROVIDER);
 		selectedId = undefined;
+		selectionUnavailable = false;
 		const entry = ctx.sessionManager
 			.getBranch()
 			.slice()
 			.reverse()
 			.find((e) => e.type === "custom" && e.customType === "codex-account-selection");
-		const data = (entry?.type === "custom" ? entry.data : undefined) as
-			| { accountId?: unknown; modelId?: unknown }
+		let data = (entry?.type === "custom" ? entry.data : undefined) as
+			| { accountId?: unknown; modelId?: unknown; defaultUnavailable?: boolean }
 			| undefined;
+		selectionUnavailable = data?.defaultUnavailable === true;
+		const file = ctx.sessionManager.getSessionFile();
+		const fresh = event.reason === "new" || (event.reason === "startup" && (!file || !existsSync(file)));
+		if (!entry && fresh && ctx.model?.provider === PROVIDER) {
+			try {
+				const accountId = await service.store.defaultAccount();
+				if (accountId) {
+					data = { accountId, modelId: ctx.model.id };
+					// Pin the inherited choice, including on failure: never silently fall back.
+					pi.appendEntry("codex-account-selection", data);
+				}
+			} catch {
+				selectionUnavailable = true;
+				pi.appendEntry("codex-account-selection", { defaultUnavailable: true });
+				ctx.ui.notify(
+					"Não foi possível ler a conta padrão. Confira /codex-accounts antes de continuar.",
+					"error",
+				);
+			}
+		}
 		if (typeof data?.accountId !== "string" || typeof data.modelId !== "string") {
 			if (ctx.model?.provider === PERSONAL_PROVIDER) {
 				const normal = ctx.modelRegistry.find(PROVIDER, ctx.model.id);
@@ -310,15 +391,28 @@ export default function codexAccounts(
 			pi.registerProvider(provider);
 			await refreshAccountProvider(ctx);
 			const model = provider.getModels().find((m) => m.id === data.modelId);
-			if (model && ctx.model && [PROVIDER, PERSONAL_PROVIDER].includes(ctx.model.provider)) {
-				if (!(await pi.setModel(model))) throw new Error("Unavailable");
+			if (ctx.model && [PROVIDER, PERSONAL_PROVIDER].includes(ctx.model.provider)) {
+				if (!model || !(await pi.setModel(model))) throw new Error("Unavailable");
 			}
 		} catch {
+			selectionUnavailable = true;
 			ctx.ui.notify(
 				"Conta salva indisponível. Selecione uma conta em /codex-accounts antes de continuar.",
 				"warning",
 			);
 		}
+	});
+
+	// A failed restore/default activation must not send the next prompt under Pi's normal login.
+	pi.on("input", (_event, ctx) => {
+		if (selectionUnavailable && ctx.model && [PROVIDER, PERSONAL_PROVIDER].includes(ctx.model.provider)) {
+			ctx.ui.notify(
+				"Conta indisponível. Escolha uma conta ou o login do Pi em /codex-accounts antes de enviar.",
+				"error",
+			);
+			return { action: "handled" };
+		}
+		return { action: "continue" };
 	});
 
 	pi.registerCommand("codex-accounts", {

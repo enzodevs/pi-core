@@ -1,7 +1,7 @@
 import type { Credential } from "@earendil-works/pi-ai";
 import { type ModelRegistry, readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { PROVIDER } from "./store.js";
-import { fetchUsage } from "./usage.js";
+import { consumeReset, fetchUsage } from "./usage.js";
 
 export interface PiAccount {
 	id: string;
@@ -39,15 +39,28 @@ export async function fetchPiAccountUsage(
 	request: typeof fetchUsage = fetchUsage,
 ) {
 	try {
-		signal.throwIfAborted();
-		const result = await registry.getProviderAuth(PROVIDER);
-		signal.throwIfAborted();
-		const access = result?.auth.apiKey;
-		// /login or another process may have changed accounts since the menu was built.
-		// Never attribute another account's quota to this row or send a mismatched header.
-		if (!access || tokenAccountId(access) !== id) throw new Error("Account changed");
-		return await request(access, id, signal);
+		return await request(await piAccess(id, registry, signal), id, signal);
 	} catch {
 		throw new Error("Limites do login padrão indisponíveis. Atualize o menu ou confira /login.");
 	}
+}
+
+export async function resetPiAccount(
+	id: string,
+	registry: Pick<ModelRegistry, "getProviderAuth">,
+	signal: AbortSignal,
+	request: typeof consumeReset = consumeReset,
+) {
+	return request(await piAccess(id, registry, signal), id, signal);
+}
+
+async function piAccess(id: string, registry: Pick<ModelRegistry, "getProviderAuth">, signal: AbortSignal) {
+	signal.throwIfAborted();
+	const result = await registry.getProviderAuth(PROVIDER);
+	signal.throwIfAborted();
+	const access = result?.auth.apiKey;
+	// /login or another process may have changed accounts since the menu was built.
+	// Never attribute another account's quota to this row or send a mismatched header.
+	if (!access || tokenAccountId(access) !== id) throw new Error("Account changed");
+	return access;
 }

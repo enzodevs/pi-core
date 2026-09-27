@@ -14,6 +14,7 @@ interface State {
 	version: 1;
 	accounts: Account[];
 	piLabels?: Record<string, string>;
+	defaultAccountId?: string;
 }
 
 export function normalizeLabel(value: string): string {
@@ -41,6 +42,11 @@ function parseState(text: string): State {
 			normalizeLabel(label);
 		}
 	}
+	if (
+		data.defaultAccountId !== undefined &&
+		(typeof data.defaultAccountId !== "string" || !data.defaultAccountId)
+	)
+		throw new Error("Conta padrão inválida.");
 	const ids = new Set<string>();
 	for (const a of data.accounts) {
 		if (
@@ -127,6 +133,20 @@ export class AccountStore {
 		}));
 	}
 
+	defaultAccount(): Promise<string | undefined> {
+		return this.transaction(async (state) => ({ result: state.defaultAccountId }));
+	}
+
+	async setDefaultAccount(id: string | undefined): Promise<void> {
+		await this.transaction(async (state) => {
+			if (id !== undefined && !state.accounts.some((account) => account.id === id))
+				throw new Error("Conta removida; atualize o menu.");
+			if (id === undefined) delete state.defaultAccountId;
+			else state.defaultAccountId = id;
+			return { result: undefined, save: true };
+		});
+	}
+
 	async add(label: string, credential: OAuthCredential): Promise<void> {
 		const account = { id: accountId(credential), label: normalizeLabel(label), credential };
 		parseState(JSON.stringify({ version: 1, accounts: [account] }));
@@ -163,6 +183,7 @@ export class AccountStore {
 	async remove(id: string): Promise<void> {
 		await this.transaction(async (state) => {
 			state.accounts = state.accounts.filter((a) => a.id !== id);
+			if (state.defaultAccountId === id) delete state.defaultAccountId;
 			return { result: undefined, save: true };
 		});
 	}
