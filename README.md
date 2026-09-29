@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/enzodevs/pi-core/actions"><img src="https://img.shields.io/badge/checks-Biome%20%C2%B7%20TypeScript%20%C2%B7%20Vitest-2ea44f?style=for-the-badge" alt="Checks"></a>
-  <a href="package.json"><img src="https://img.shields.io/badge/node-20%2B-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node 20+"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-22.19%2B-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node 22.19+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-black?style=for-the-badge" alt="MIT License"></a>
 </p>
 
@@ -67,7 +67,8 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 
 ### Requirements
 
-- Node.js 20 or newer
+- Node.js 22.19.0 or newer
+- Pi 0.99.1 (the supported baseline; Pi packages use the 0.99.x compatibility range)
 - A working Pi installation
 
 ### Install from GitHub
@@ -337,7 +338,9 @@ When enabled, subsequent Codex requests include:
 }
 ```
 
-The official OpenAI Codex implementation uses the same request value for Fast mode. Pi Core applies it only when the active provider is `openai-codex`; other providers remain untouched. Priority processing may incur premium pricing.
+The official OpenAI Codex implementation uses the same request value for Fast mode. Pi Core applies it only to the `openai-codex-responses` API, including personal `codex-accounts`; other APIs remain untouched. Priority processing may incur premium pricing.
+
+Pi 0.99 labels OpenAI Codex as legacy and offers ChatGPT login through the `openai` provider. Pi Core does not migrate credentials or enable Fast mode on that new provider automatically. Personal accounts still delegate authentication and model discovery to the upstream legacy Codex provider, so new catalog models such as GPT-6.1 Sol do not require a Pi Core model list update.
 
 State persists at:
 
@@ -390,7 +393,7 @@ flowchart LR
 
 ## Development
 
-Development uses the latest Node.js 24 LTS pinned in `.node-version` (Node.js 22 remains the minimum supported development runtime); the published extensions remain compatible with Node.js 20.
+Development uses Node.js 24 LTS pinned in `.node-version`; both development and published extensions require Node.js 22.19.0 or newer, matching Pi 0.99.1. All four Pi development packages are pinned to the same version.
 
 ```bash
 make install
@@ -412,7 +415,9 @@ Compatibility checks cover two additional boundaries:
 
 - The regular Vitest suite loads every configured extension through Pi's public extension loader and compiles an explicit public-API contract against the locked Pi dependencies.
 - `make compat-package` packs pi-core, installs the tarball into an isolated temporary project with the locked Pi version, and loads every packaged extension.
-- `make compat-latest` copies the repository to an isolated temporary directory, installs the latest published Pi packages, and runs type checking, tests, and a package dry run. It is intentionally opt-in because it requires network access and may expose an upstream breaking change before pi-core updates its lockfile.
+- `make compat-latest` copies the repository to an isolated temporary directory, installs the latest published Pi packages, and runs type checking, tests, a package dry run, and `compat:package`. The final check installs the tarball and loads its extensions, catching incompatible peer dependency ranges as well as loader failures. It is intentionally opt-in because it requires network access and may expose an upstream breaking change before pi-core updates its lockfile.
+
+Subagents intentionally launch with `--no-extensions` and an explicit tool allowlist. Since Pi 0.99 this also disables built-in extensions (MCP, codemode, tool search, and llama.cpp); children do not automatically inherit those integrations. Built-in tool orchestration and migration to the new OpenAI ChatGPT provider are not enabled by this compatibility update.
 
 Set `PI_CORE_KEEP_COMPAT_TEMP=1` to preserve a compatibility command's temporary workspace for diagnosis.
 

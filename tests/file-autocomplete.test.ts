@@ -25,6 +25,24 @@ describe("project file autocomplete", () => {
 		expect(extractAtFileQuery("email@example.com")).toBeUndefined();
 	});
 
+	it.each(["(", "[", "{", "<", "`"])("extracts @ queries after the %s wrapper", (wrapper) => {
+		expect(extractAtFileQuery(`review ${wrapper}@src/ind`)).toEqual({
+			prefix: "@src/ind",
+			query: "src/ind",
+			quoted: false,
+		});
+		expect(extractAtFileQuery(`${wrapper}@"docs/user gu`)).toEqual({
+			prefix: '@"docs/user gu',
+			query: "docs/user gu",
+			quoted: true,
+		});
+	});
+
+	it.each(["email@example.com", "src/@file", "word@file"])(
+		"does not extract an embedded @ query from %s",
+		(text) => expect(extractAtFileQuery(text)).toBeUndefined(),
+	);
+
 	it("recognizes home and absolute filesystem queries", () => {
 		expect(isFilesystemQuery("~/Downloads/image")).toBe(true);
 		expect(isFilesystemQuery("/home/user/image")).toBe(true);

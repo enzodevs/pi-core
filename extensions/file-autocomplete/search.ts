@@ -8,7 +8,7 @@ export interface AtFileQuery {
 }
 
 export function extractAtFileQuery(textBeforeCursor: string): AtFileQuery | undefined {
-	const match = textBeforeCursor.match(/(?:^|[ \t])(@(?:"[^"]*|[^\s]*))$/);
+	const match = textBeforeCursor.match(/(?:^|[ \t([{<`])(@(?:"[^"]*|[^\s]*))$/);
 	const prefix = match?.[1];
 	if (!prefix) return undefined;
 	const quoted = prefix.startsWith('@"');

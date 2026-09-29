@@ -43,10 +43,14 @@ try {
 	rmSync(join(temporaryRoot, "package-lock.json"), { force: true });
 
 	console.log(`Checking pi-core against the latest Pi packages in ${temporaryRoot}`);
-	if (!run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"])) process.exit();
-	if (!run("npm", ["run", "typecheck"])) process.exit();
-	if (!run("npm", ["test"])) process.exit();
-	run("npm", ["pack", "--dry-run"]);
+	if (
+		run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"]) &&
+		run("npm", ["run", "typecheck"]) &&
+		run("npm", ["test"]) &&
+		run("npm", ["pack", "--dry-run"])
+	) {
+		run("npm", ["run", "compat:package"]);
+	}
 } finally {
 	if (keepTemporary) console.log(`Preserved compatibility workspace: ${temporaryRoot}`);
 	else rmSync(temporaryRoot, { recursive: true, force: true });

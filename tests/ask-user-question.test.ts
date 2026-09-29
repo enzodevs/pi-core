@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { Check } from "typebox/value";
 import { describe, expect, it } from "vitest";
@@ -57,21 +57,25 @@ function context(options: {
 	hasUI?: boolean;
 	editor?: (title: string) => Promise<string | undefined>;
 	custom?: unknown;
-}): ExtensionContext {
+}): ExtensionToolContext {
 	return {
 		mode: options.mode ?? "tui",
 		hasUI: options.hasUI ?? true,
+		tools: [],
+		executeTool: async () => {
+			throw new Error("Unexpected nested tool execution in ask_user_question");
+		},
 		ui: {
 			editor: options.editor ?? (async () => undefined),
 			custom: options.custom,
 		},
-	} as unknown as ExtensionContext;
+	} as unknown as ExtensionToolContext;
 }
 
 async function execute(
 	tool: AskTool,
 	input: AskUserQuestionInput,
-	ctx: ExtensionContext,
+	ctx: ExtensionToolContext,
 	signal?: AbortSignal,
 ) {
 	return tool.execute("call", input, signal, undefined, ctx);
