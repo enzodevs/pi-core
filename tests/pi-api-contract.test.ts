@@ -17,6 +17,7 @@ import imageClipboard from "../extensions/image-clipboard/index.js";
 import interstellar from "../extensions/interstellar/index.js";
 import jsonHeadroom from "../extensions/json-headroom/index.js";
 import memoryContext from "../extensions/memory/index.js";
+import nestedAgents from "../extensions/nested-agents/index.js";
 import idleRecap from "../extensions/recap/index.js";
 import sessionCwd from "../extensions/session-cwd/index.js";
 import sessionTitle from "../extensions/session-title/index.js";
@@ -36,6 +37,7 @@ const factories = [
 	interstellar,
 	jsonHeadroom,
 	memoryContext,
+	nestedAgents,
 	idleRecap,
 	sessionCwd,
 	sessionTitle,

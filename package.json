@@ -37,6 +37,7 @@
 			"./extensions/file-autocomplete/index.ts",
 			"./extensions/footer/index.ts",
 			"./extensions/session-cwd/index.ts",
+			"./extensions/nested-agents/index.ts",
 			"./extensions/interstellar/index.ts",
 			"./extensions/recap/index.ts",
 			"./extensions/session-title/index.ts",

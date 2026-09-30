@@ -122,6 +122,10 @@ Only large, complete JSON bash results with supported tabular shapes are compact
 
 See [scope, storage, regression tests, and limitations](docs/headroom-json.md). RTK and ICM are not integrated.
 
+### Nested project guides (opt-in)
+
+After reloading Pi, `/nested-agents on` enables bounded, read-triggered discovery of nested `AGENTS.md`/`CLAUDE.md` instructions within the startup project. It requires project trust and nonempty startup context, adds no tool or extra turn, and stays off by default. `/nested-agents off` disables it. See [scope, budgets, lifecycle policy, and verification limits](docs/nested-agents.md).
+
 ## Skill visibility
 
 Pi Core controls how much information each skill contributes to model context. Settings layer from the global default, through global per-skill overrides, to project overrides. Git repositories use a stable project root (linked worktrees share the main checkout); outside Git, the exact working directory is used.
