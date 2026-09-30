@@ -53,7 +53,8 @@
 		]
 	},
 	"scripts": {
-		"check": "npm run format:check && npm run typecheck && npm test && npm run fallow",
+		"check": "npm run review:skill:check && npm run format:check && npm run typecheck && npm test && npm run fallow",
+		"review:skill:check": "node scripts/sync-review-skill.mjs --check",
 		"compat:latest": "node scripts/compat-latest.mjs",
 		"compat:package": "node scripts/package-smoke.mjs",
 		"benchmark:fast": "node extensions/fast-mode/benchmark.mjs",

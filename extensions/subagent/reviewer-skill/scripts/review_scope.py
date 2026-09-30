@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -14,8 +15,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-SCHEMA_VERSION = 1
-HUNK_RE = re.compile(r"^@@ -(?:\d+)(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+SCHEMA_VERSION = 2
+HUNK_RE = re.compile(
+    r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? "
+    r"\+(?P<start>\d+)(?:,(?P<count>\d+))? @@"
+)
 
 
 class ScopeError(RuntimeError):
@@ -86,6 +90,15 @@ def diff_arguments(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]
     if args.base:
         base_sha = resolve_revision(args.repo, args.base)
         head_sha = resolve_revision(args.repo, args.head)
+        if getattr(args, "merge_base", False):
+            base_sha = str(run_git(args.repo, "merge-base", base_sha, head_sha)).strip()
+        if args.working_tree:
+            return [base_sha], {
+                "mode": "working-tree",
+                "base": base_sha,
+                "head": "WORKTREE",
+                "requested_base": args.base,
+            }
         return [base_sha, head_sha], {
             "mode": "revisions",
             "base": base_sha,
@@ -138,6 +151,87 @@ def file_bytes(repo: Path, scope: dict[str, Any], change: Change) -> bytes:
     return working_path.read_bytes()
 
 
+def hunk_anchors(patch: str) -> tuple[list[dict[str, int]], list[dict[str, int]]]:
+    ranges: list[dict[str, int]] = []
+    deletions: list[dict[str, int]] = []
+    for line in patch.splitlines():
+        match = HUNK_RE.match(line)
+        if not match:
+            continue
+        count = int(match.group("count") or "1")
+        start = int(match.group("start"))
+        if count:
+            ranges.append({"start": start, "end": start + count - 1})
+        else:
+            old_start = int(match.group("old_start"))
+            old_count = int(match.group("old_count") or "1")
+            if old_count:
+                deletions.append(
+                    {
+                        "old_start": old_start,
+                        "old_end": old_start + old_count - 1,
+                        "new_line": start,
+                    }
+                )
+    return ranges, deletions
+
+
+def item_patch(repo: Path, scope: dict[str, Any], change: Change) -> str:
+    """Textual zero-context patch, including untracked files and recreated deletions."""
+    old_path = change.old_path or change.path
+    old = (
+        b""
+        if change.status == "A"
+        else run_git(repo, "show", f"{scope['base']}:{old_path}", text=False)
+    )
+    new = b"" if change.status == "D" else file_bytes(repo, scope, change)
+    assert isinstance(old, bytes)
+    if b"\0" in old or b"\0" in new:
+        return "Binary change: inspect the manifest and format-specific evidence.\n"
+    return "".join(
+        difflib.unified_diff(
+            [line + "\n" for line in old.decode("utf-8", errors="replace").splitlines()],
+            [line + "\n" for line in new.decode("utf-8", errors="replace").splitlines()],
+            fromfile=old_path,
+            tofile=change.path,
+            n=0,
+        )
+    )
+
+
+def scope_fingerprint(repo: Path, diff_args: list[str], mode: str) -> str:
+    """Detect drift, not a snapshot: the parent must pause writers during review."""
+    digest = hashlib.sha256()
+
+    def add(value: bytes) -> None:
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+
+    add(str(repo.resolve()).encode("utf-8", errors="surrogateescape"))
+    add(mode.encode())
+    for argument in diff_args:
+        add(argument.encode())
+    if mode != "revisions":
+        add(resolve_revision(repo, "HEAD").encode())
+    data = run_git(
+        repo,
+        "diff",
+        "--binary",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames",
+        *diff_args,
+        text=False,
+    )
+    assert isinstance(data, bytes)
+    add(data)
+    if mode == "working-tree":
+        for change in untracked_changes(repo):
+            add(change.path.encode("utf-8", errors="surrogateescape"))
+            add(file_bytes(repo, {"mode": mode}, change))
+    return digest.hexdigest()
+
+
 def changed_ranges(repo: Path, diff_args: list[str], change: Change) -> list[dict[str, int]]:
     pathspec = change.path
     output = run_git(
@@ -151,16 +245,7 @@ def changed_ranges(repo: Path, diff_args: list[str], change: Change) -> list[dic
         pathspec,
     )
     assert isinstance(output, str)
-    ranges: list[dict[str, int]] = []
-    for line in output.splitlines():
-        match = HUNK_RE.match(line)
-        if not match:
-            continue
-        count = int(match.group("count") or "1")
-        start = int(match.group("start"))
-        if count > 0:
-            ranges.append({"start": start, "end": start + count - 1})
-    return ranges
+    return hunk_anchors(output)[0]
 
 
 def git_object_exists(repo: Path, object_name: str) -> bool:
@@ -251,6 +336,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     repo = repository_root(args.repo)
     args.repo = repo
     selected_diff_args, scope = diff_arguments(args)
+    before = scope_fingerprint(repo, selected_diff_args, scope["mode"])
+    if scope["mode"] != "revisions":
+        scope["checkout_head"] = resolve_revision(repo, "HEAD")
     raw = run_git(
         repo,
         "diff",
@@ -262,28 +350,23 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     )
     assert isinstance(raw, bytes)
     changes = parse_name_status(raw)
-    untracked_paths: set[str] = set()
     if scope["mode"] == "working-tree":
-        known = {change.path for change in changes}
-        untracked = [change for change in untracked_changes(repo) if change.path not in known]
+        untracked = untracked_changes(repo)
         untracked_paths = {change.path for change in untracked}
-        changes.extend(untracked)
+        changes = [
+            Change("M", change.path)
+            if change.status == "D" and change.path in untracked_paths
+            else change
+            for change in changes
+        ]
+        known = {change.path for change in changes}
+        changes.extend(change for change in untracked if change.path not in known)
 
     items: list[dict[str, Any]] = []
     for change in changes:
         content = file_bytes(repo, scope, change)
         tags = risk_tags(change.path, content)
-        ranges = (
-            []
-            if change.status == "D" or (scope["mode"] == "working-tree" and not selected_diff_args)
-            else changed_ranges(repo, selected_diff_args, change)
-        )
-        if scope["mode"] == "working-tree" and change.status == "A" and not ranges:
-            line_count = content.count(b"\n") + (
-                1 if content and not content.endswith(b"\n") else 0
-            )
-            if line_count:
-                ranges = [{"start": 1, "end": line_count}]
+        ranges, deletion_points = hunk_anchors(item_patch(repo, scope, change))
         items.append(
             {
                 "id": item_identifier(change),
@@ -292,6 +375,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 "size_bytes": len(content),
                 "content_sha256": hashlib.sha256(content).hexdigest(),
                 "changed_ranges": ranges,
+                "deletion_points": deletion_points,
                 "instruction_files": instruction_files(repo, change.path, scope),
                 "instruction_source": scope["head"],
                 "risk_tags": tags,
@@ -299,22 +383,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
 
-    diff_bytes = run_git(
-        repo,
-        "diff",
-        "--binary",
-        "--no-ext-diff",
-        "--find-renames",
-        *selected_diff_args,
-        text=False,
-    )
-    assert isinstance(diff_bytes, bytes)
-    if scope["mode"] == "working-tree":
-        for change in changes:
-            if change.path in untracked_paths:
-                path_bytes = change.path.encode("utf-8", errors="surrogateescape")
-                diff_bytes += b"\0UNTRACKED\0" + path_bytes + b"\0"
-                diff_bytes += file_bytes(repo, scope, change)
+    after = scope_fingerprint(repo, selected_diff_args, scope["mode"])
+    if before != after:
+        raise ScopeError("Scope changed during inventory; pause writers and recreate the manifest")
 
     bundles: dict[str, list[str]] = {}
     for item in items:
@@ -324,7 +395,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "repository": str(repo),
         "scope": scope,
-        "diff_sha256": hashlib.sha256(diff_bytes).hexdigest(),
+        "diff_sha256": after,
         "summary": {
             "item_count": len(items),
             "binary_count": sum(bool(item["binary"]) for item in items),
@@ -335,11 +406,37 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def assert_fresh(manifest: dict[str, Any]) -> None:
+    """Reject stale mutable scopes. Legacy revision manifests remain usable."""
+    scope = manifest["scope"]
+    if scope["mode"] == "revisions":
+        return
+    if manifest.get("schema_version") != SCHEMA_VERSION:
+        raise ScopeError("Legacy mutable manifest: recreate it with review_scope.py")
+    repo = Path(manifest["repository"])
+    if resolve_revision(repo, "HEAD") != scope.get("checkout_head"):
+        raise ScopeError("HEAD changed; pause writers and start a new review manifest")
+    args = argparse.Namespace(
+        repo=repo,
+        base=scope["base"] if scope["mode"] == "working-tree" else None,
+        head="HEAD",
+        working_tree=scope["mode"] == "working-tree",
+        staged=scope["mode"] == "staged",
+        merge_base=False,
+    )
+    current = build_manifest(args)
+    if current["diff_sha256"] != manifest["diff_sha256"] or current["items"] != manifest["items"]:
+        raise ScopeError("Review scope changed; pause writers and start a new review manifest")
+
+
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(description=__doc__)
     command.add_argument("--repo", type=Path, default=Path.cwd())
+    command.add_argument("--base", help="Exact base revision (can be combined with --working-tree)")
+    command.add_argument(
+        "--merge-base", action="store_true", help="Use merge-base of base and head"
+    )
     scope = command.add_mutually_exclusive_group()
-    scope.add_argument("--base", help="Base revision for a committed range")
     scope.add_argument("--staged", action="store_true", help="Review the index against HEAD")
     scope.add_argument(
         "--working-tree",
@@ -354,6 +451,12 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     try:
+        if args.staged and args.base:
+            raise ScopeError("--staged cannot be combined with --base")
+        if args.merge_base and not args.base:
+            raise ScopeError("--merge-base requires --base")
+        if args.head != "HEAD" and (args.working_tree or not args.base):
+            raise ScopeError("--head requires a committed --base range")
         manifest = build_manifest(args)
     except (OSError, ScopeError) as error:
         print(f"review_scope: {error}", file=sys.stderr)

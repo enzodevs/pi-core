@@ -41,6 +41,9 @@ Technically true observations can still have negative review value when they are
 - Assuming an input is user-controlled without tracing its source.
 - Ignoring framework controls or deployment configuration.
 - Suppressing a candidate because a safe sibling exists.
-- Calling a behavior intentional merely because documentation describes it.
+- Treating unapproved descriptive documentation as proof of user-approved intent.
+- Overriding an explicitly approved decision with reviewer preference instead of checking implementation and unintended consequences.
+- Hiding a proven unintended consequence as merely a question because the underlying decision was approved.
+- Treating evidence-method labels as automatic confidence: a misleading mock reproduction may prove less than a complete source trace.
 - Reporting speculative future maintainability risks as present defects.
 

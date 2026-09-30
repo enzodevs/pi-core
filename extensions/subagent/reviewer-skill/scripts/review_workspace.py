@@ -97,7 +97,7 @@ def sweep_stale(root: Path, older_than_hours: float, now: datetime | None = None
     return removed
 
 
-def create_workspace(root: Path, stale_after_hours: float = 24.0) -> Path:
+def create_workspace(root: Path, stale_after_hours: float = 0.0) -> Path:
     resolved_root = root.resolve()
     sweep_stale(resolved_root, stale_after_hours)
     workspace = Path(tempfile.mkdtemp(prefix=PREFIX, dir=resolved_root)).resolve()
@@ -149,8 +149,8 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--stale-after-hours",
         type=float,
-        default=24.0,
-        help="Remove older marked workspaces under the same root; use 0 to disable",
+        default=0.0,
+        help="Opt-in sweep of old marked workspaces; default 0 preserves active/retained reviews",
     )
 
     finalize = subcommands.add_parser("finalize", help="Retain or safely remove a workspace")

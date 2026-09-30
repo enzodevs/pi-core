@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install format format-check typecheck test fallow health check pack compat-latest compat-package clean headroom-install headroom-test
+.PHONY: help install format format-check typecheck test fallow health check pack compat-latest compat-package clean headroom-install headroom-test review-skill-check
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -31,6 +31,9 @@ headroom-install: ## Install the optional pinned JSON-only Headroom runtime (req
 
 headroom-test: ## Run the optional real Headroom regression suite
 	npm run headroom:test
+
+review-skill-check: ## Verify the generated evidence-first review skill
+	npm run review:skill:check
 
 check: ## Run all required verification
 	npm run check

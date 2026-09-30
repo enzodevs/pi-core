@@ -5,10 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.review_scope import ScopeError, assert_fresh
 
 REVIEW_STATES = {"pending", "reviewed", "not_applicable", "deferred"}
 DISPOSITIONS = {"confirmed", "suppressed", "deferred"}
@@ -27,12 +33,21 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    encoded = json.dumps(value, indent=2, sort_keys=True) + "\n"
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def initialize(manifest: dict[str, Any]) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": manifest.get("schema_version", 1),
         "manifest_diff_sha256": manifest.get("diff_sha256"),
         "review": {
             "state": "open",
@@ -40,6 +55,9 @@ def initialize(manifest: dict[str, Any]) -> dict[str, Any]:
             "reviewer": "",
             "intent": "",
             "invariants": [],
+            "approved_decisions": [],
+            "not_yet": [],
+            "questions": [],
         },
         "coverage": [
             {
@@ -61,7 +79,7 @@ def is_nonempty_string(value: Any) -> bool:
 
 
 def is_nonempty_list(value: Any) -> bool:
-    return isinstance(value, list) and len(value) > 0
+    return isinstance(value, list) and bool(value) and all(is_nonempty_string(v) for v in value)
 
 
 def line_is_changed(item: dict[str, Any], line: int) -> bool:
@@ -74,7 +92,12 @@ def line_is_changed(item: dict[str, Any], line: int) -> bool:
     )
 
 
-def validate(manifest: dict[str, Any], ledger: dict[str, Any]) -> tuple[list[str], list[str]]:
+def validate(
+    manifest: dict[str, Any],
+    ledger: dict[str, Any],
+    *,
+    final: bool = True,
+) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
     items = {item.get("id"): item for item in manifest.get("items", []) if item.get("id")}
@@ -86,13 +109,23 @@ def validate(manifest: dict[str, Any], ledger: dict[str, Any]) -> tuple[list[str
     if not isinstance(review, dict):
         errors.append("review must be an object")
     else:
-        if review.get("state") not in {"complete", "incomplete"}:
-            errors.append("review.state must be complete or incomplete")
-        for field in ("reviewer", "intent"):
-            if not is_nonempty_string(review.get(field)):
-                errors.append(f"review.{field} is required")
-        if not is_nonempty_list(review.get("invariants")):
-            errors.append("review.invariants must be a non-empty list")
+        allowed_states = {"complete", "incomplete"} if final else {"open", "complete", "incomplete"}
+        if review.get("state") not in allowed_states:
+            errors.append(f"review.state must be one of {sorted(allowed_states)}")
+        if review.get("state") == "incomplete":
+            warnings.append("Review explicitly incomplete")
+        if final:
+            for field in ("reviewer", "intent"):
+                if not is_nonempty_string(review.get(field)):
+                    errors.append(f"review.{field} is required")
+            if not is_nonempty_list(review.get("invariants")):
+                errors.append("review.invariants must be a non-empty list")
+        for field in ("approved_decisions", "not_yet", "questions"):
+            entries = review.get(field, [])
+            if not isinstance(entries, list) or any(not is_nonempty_string(v) for v in entries):
+                errors.append(f"review.{field} must be a list of non-empty strings")
+        if review.get("questions"):
+            warnings.append("Unresolved owner questions; see review.questions")
 
     coverage_entries = ledger.get("coverage")
     if not isinstance(coverage_entries, list):
@@ -116,7 +149,7 @@ def validate(manifest: dict[str, Any], ledger: dict[str, Any]) -> tuple[list[str
         state = entry.get("status")
         if state not in REVIEW_STATES:
             errors.append(f"{label}.status must be one of {sorted(REVIEW_STATES)}")
-        if state == "pending":
+        if state == "pending" and final:
             errors.append(f"{label} is still pending")
         if state == "reviewed":
             if not is_nonempty_list(entry.get("checks")):
@@ -161,13 +194,22 @@ def validate(manifest: dict[str, Any], ledger: dict[str, Any]) -> tuple[list[str
             errors.append(f"{label}.path must match the manifest item path")
 
         disposition = candidate.get("disposition")
-        if disposition not in DISPOSITIONS:
+        if disposition == "open" and not final:
+            continue
+        if not isinstance(disposition, str) or disposition not in DISPOSITIONS:
             errors.append(f"{label}.disposition must be one of {sorted(DISPOSITIONS)}")
             continue
+        action = candidate.get(
+            "next_action", "fix" if disposition == "confirmed" else "supply_fact"
+        )
+        if not isinstance(action, str) or action not in {"fix", "ask_owner", "supply_fact", "none"}:
+            errors.append(f"{label}.next_action is invalid")
+        if disposition == "confirmed" and action not in ("fix", "ask_owner"):
+            errors.append(f"{label}.next_action must be fix or ask_owner for a confirmed finding")
 
         if disposition == "confirmed":
             severity = candidate.get("severity")
-            if severity not in SEVERITIES:
+            if not isinstance(severity, str) or severity not in SEVERITIES:
                 errors.append(f"{label}.severity must be one of {sorted(SEVERITIES)}")
             confidence = candidate.get("confidence")
             if not isinstance(confidence, int | float) or isinstance(confidence, bool):
@@ -185,6 +227,19 @@ def validate(manifest: dict[str, Any], ledger: dict[str, Any]) -> tuple[list[str
             if item.get("status") == "D":
                 if candidate.get("anchor") != "deletion":
                     errors.append(f"{label}.anchor must be 'deletion' for deleted files")
+            elif candidate.get("anchor") == "deletion":
+                old_line = candidate.get("old_line")
+                if (
+                    not isinstance(old_line, int)
+                    or isinstance(old_line, bool)
+                    or not any(
+                        point["old_start"] <= old_line <= point["old_end"]
+                        for point in item.get("deletion_points", [])
+                    )
+                ):
+                    errors.append(
+                        f"{label}.old_line must identify a removed line in deletion_points"
+                    )
             else:
                 line = candidate.get("line")
                 if not isinstance(line, int) or isinstance(line, bool):
@@ -205,6 +260,9 @@ def validate(manifest: dict[str, Any], ledger: dict[str, Any]) -> tuple[list[str
 
 
 def render(manifest: dict[str, Any], ledger: dict[str, Any]) -> str:
+    errors, warnings = validate(manifest, ledger)
+    if errors:
+        raise ValueError("Cannot render invalid ledger: " + "; ".join(errors))
     items = {item.get("id"): item for item in manifest.get("items", [])}
     candidates = ledger.get("candidates", [])
     confirmed = [
@@ -239,7 +297,7 @@ def render(manifest: dict[str, Any], ledger: dict[str, Any]) -> str:
 
     lines = ["# Evidence-first code review", "", "## Findings", ""]
     if not confirmed:
-        if deferred_coverage or deferred_candidates:
+        if warnings:
             lines.append(
                 "No confirmed findings, but the review has unresolved coverage or proof gaps."
             )
@@ -249,7 +307,11 @@ def render(manifest: dict[str, Any], ledger: dict[str, Any]) -> str:
             )
     for finding in confirmed:
         location = finding["path"]
-        if isinstance(finding.get("line"), int):
+        if finding.get("anchor") == "deletion":
+            location += (
+                f":old:{finding['old_line']}" if "old_line" in finding else " (deleted file)"
+            )
+        elif isinstance(finding.get("line"), int):
             location += f":{finding['line']}"
         lines.extend(
             [
@@ -289,6 +351,18 @@ def render(manifest: dict[str, Any], ledger: dict[str, Any]) -> str:
         for candidate in deferred_candidates:
             path = items.get(candidate.get("item_id"), {}).get("path", candidate.get("path"))
             lines.append(f"- `{path}` — {candidate.get('id')}: {candidate.get('proof_gap')}")
+    lines.extend(["", "## Handoff", ""])
+    for finding in confirmed:
+        action = finding.get("next_action", "fix")
+        lines.append(f"- {action}: {finding['id']} — {finding['remediation']}")
+    for candidate in deferred_candidates:
+        lines.append(f"- supply_fact: {candidate['id']} — {candidate['proof_gap']}")
+    for question in ledger.get("review", {}).get("questions", []):
+        lines.append(f"- ask_owner: {question}")
+    if not confirmed and not deferred_candidates and not ledger.get("review", {}).get("questions"):
+        lines.append("- No candidate action; consult coverage and review state before proceeding.")
+    lines.append(f"- Review state: {ledger['review']['state']}")
+    lines.append(f"- Scope fingerprint: `{manifest.get('diff_sha256')}`")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -320,6 +394,7 @@ def main() -> int:
             write_json(args.output, initialize(manifest))
             return 0
         ledger = load_json(args.ledger)
+        assert_fresh(manifest)
         errors, warnings = validate(manifest, ledger)
         if args.command == "validate":
             for warning in warnings:
@@ -340,7 +415,7 @@ def main() -> int:
         else:
             sys.stdout.write(rendered)
         return 0
-    except ValueError as error:
+    except (ValueError, OSError, ScopeError) as error:
         print(f"review_ledger: {error}", file=sys.stderr)
         return 2
 
