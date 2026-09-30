@@ -15,7 +15,7 @@ import {
 import { SkillIndexStore } from "./index-store.js";
 import { getStoragePaths } from "./paths.js";
 import { resolveProjectRoot } from "./project-root.js";
-import { renderManagedSkills, replaceSkillsSection } from "./prompt.js";
+import { renderManagedSkills } from "./prompt.js";
 import { searchSkills } from "./search.js";
 import { SKILL_MODES, type SkillManagerConfig, type SkillMode, toIndexedSkill } from "./types.js";
 import { showSkillManager } from "./ui.js";
@@ -167,7 +167,11 @@ export default async function skillManager(pi: ExtensionAPI) {
 		loadedSkills = event.systemPromptOptions.skills ?? [];
 		const project = await resolveProjectRoot(ctx.cwd);
 		await refreshIndex(project, loadedSkills);
-		const section = renderManagedSkills(loadedSkills, (name) => modeFor(project, name));
-		return { systemPrompt: replaceSkillsSection(event.systemPrompt, section) };
+		// Override only the skills section. Returning an opaque systemPrompt forces the
+		// entire prompt and disables extensions that require structured project context.
+		event.systemPromptOptions.skills = [];
+		event.systemPromptOptions.sections.skills = renderManagedSkills(loadedSkills, (name) =>
+			modeFor(project, name),
+		).trim();
 	});
 }

@@ -1,9 +1,6 @@
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import type { SkillMode } from "./types.js";
 
-const SECTION_START = "\n\nThe following skills provide specialized instructions for specific tasks.";
-const SECTION_END = "</available_skills>";
-
 function escapeXml(value: string): string {
 	return value
 		.replaceAll("&", "&amp;")
@@ -41,17 +38,4 @@ export function renderManagedSkills(skills: readonly Skill[], modeFor: (name: st
 	}
 	lines.push("</available_skills>");
 	return lines.join("\n");
-}
-
-export function replaceSkillsSection(systemPrompt: string, managedSection: string): string {
-	const start = systemPrompt.indexOf(SECTION_START);
-	let prompt = systemPrompt;
-	if (start >= 0) {
-		const end = systemPrompt.indexOf(SECTION_END, start);
-		if (end >= 0) prompt = systemPrompt.slice(0, start) + systemPrompt.slice(end + SECTION_END.length);
-	}
-	const cwdMarker = "\nCurrent working directory:";
-	const cwdIndex = prompt.lastIndexOf(cwdMarker);
-	if (cwdIndex < 0) return `${prompt}${managedSection}`;
-	return prompt.slice(0, cwdIndex) + managedSection + prompt.slice(cwdIndex);
 }

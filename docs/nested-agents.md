@@ -54,7 +54,11 @@ A 256-byte reserve ensures notice saturation can be summarized. Guides are loade
 3. No context files: identical source read, marker absent.
 4. Nested startup + tools disabled: Pi's own ancestor injection contains the marker, with zero reads.
 
-These are executable runtime-boundary controls, **not live external-model evaluation** or proof that a model will follow the guides. No paid model calls or delegated agents are used. Live positive/negative model controls remain unverified; do not describe model adherence as established. Compaction/branch/resume projection is unit-tested; actual model-generated compaction quality is outside this feature's contract.
+These automated tests are executable runtime-boundary controls, not external-model evaluation. They use no paid model calls or delegated agents. Runtime controls also load the actual skill-manager before nested-agents, with both visible and searchable-only catalogs, proving that managed skills remain a structured section without forcing the whole prompt or bypassing the nested-guide safety gate.
+
+Separate live positive/negative controls passed on Pi 0.99.1 with openai-codex/gpt-5.5 and the user's normal installed extension set. Random parent/child markers were absent from the prompt. With `--approve --nested-agents`, the model reported both markers after exactly one source read; without enabling the feature both markers were absent. Tool logs confirmed zero guide reads and nested-guide metadata only in the enabled run. Temporary fixtures were removed. This verifies delivery and recognition of guidance, not adherence to every instruction or live compaction quality.
+
+Integration note: skill-manager must customize `systemPromptOptions.sections.skills`, not return an opaque `systemPrompt`. Opaque prompt replacement activates Pi's forced-prompt mode, which intentionally disables nested guide loading. The context inspector displays the actual rendered prompt rather than appending a second managed-skills block. Compaction/branch/resume projection remains unit-tested; actual model-generated compaction quality is outside this feature's contract.
 
 Acceptance coverage (handoff scenario numbers):
 

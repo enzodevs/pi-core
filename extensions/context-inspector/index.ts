@@ -2,7 +2,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getSkillMode, loadConfig } from "../skill-manager/config.js";
 import { getStoragePaths } from "../skill-manager/paths.js";
 import { resolveProjectRoot } from "../skill-manager/project-root.js";
-import { renderManagedSkills, replaceSkillsSection } from "../skill-manager/prompt.js";
 import { CONTEXT_VIEWS, renderContextView } from "./core.js";
 import { showContextInspector } from "./ui.js";
 
@@ -39,10 +38,9 @@ export default function contextInspector(pi: ExtensionAPI): void {
 				const mode = skillModes.get(skill.name) ?? "full";
 				return !skill.disableModelInvocation && (mode === "full" || mode === "name");
 			});
-			const effectiveSystemPrompt = replaceSkillsSection(
-				ctx.getSystemPrompt(),
-				renderManagedSkills(options.skills ?? [], (name) => skillModes.get(name) ?? "full"),
-			);
+			// Inspect the actual rendered prompt; skill-manager now owns a structured
+			// skills section, so synthesizing another block would duplicate it.
+			const effectiveSystemPrompt = ctx.getSystemPrompt();
 			const snapshot = {
 				usage: ctx.getContextUsage(),
 				systemPrompt: effectiveSystemPrompt,

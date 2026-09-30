@@ -1,6 +1,6 @@
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { renderManagedSkills, replaceSkillsSection } from "../extensions/skill-manager/prompt.js";
+import { renderManagedSkills } from "../extensions/skill-manager/prompt.js";
 import type { SkillMode } from "../extensions/skill-manager/types.js";
 
 const makeSkill = (name: string, description = `${name} description`): Skill =>
@@ -36,19 +36,9 @@ describe("managed skill prompt", () => {
 		expect(section).not.toContain("<name>off</name>");
 	});
 
-	it("replaces Pi's original skill block without duplicating it", () => {
-		const original = [
-			"Header",
-			"",
-			"The following skills provide specialized instructions for specific tasks.",
-			"old guidance",
-			"<available_skills>",
-			"old skill",
-			"</available_skills>",
-			"Current working directory: /work",
-		].join("\n");
-		const result = replaceSkillsSection(original, "\n\nMANAGED");
-		expect(result).toBe("Header\n\nMANAGED\nCurrent working directory: /work");
+	it("omits the section when no skills are model-visible", () => {
+		expect(renderManagedSkills([makeSkill("hidden")], () => "searchable")).toBe("");
+		expect(renderManagedSkills([makeSkill("disabled")], () => "off")).toBe("");
 	});
 
 	it("escapes skill metadata", () => {

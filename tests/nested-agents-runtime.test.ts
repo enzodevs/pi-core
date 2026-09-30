@@ -14,8 +14,18 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import nestedAgents from "../extensions/nested-agents/index.js";
+import skillManager from "../extensions/skill-manager/index.js";
+
+const isolatedStorage = vi.hoisted(() => ({ directory: "" }));
+vi.mock("../extensions/skill-manager/paths.js", () => ({
+	getStoragePaths: () => ({
+		directory: isolatedStorage.directory,
+		config: join(isolatedStorage.directory, "skill-manager.json"),
+		index: join(isolatedStorage.directory, "skill-index.json"),
+	}),
+}));
 
 // Exercises the actual Pi agent/tool/provider boundary with a deterministic local stream.
 // No credentials from the user's profile, external requests, model spend or child agents.
@@ -31,11 +41,39 @@ describe("nested guides through Pi 0.99.1 runtime", () => {
 		await writeFile(join(root, "AGENTS.md"), `Root guidance ${parent}`);
 		await writeFile(join(nested, "AGENTS.md"), `Nested guidance ${marker}`);
 		await writeFile(join(nested, "code.ts"), "export const originalSource = 42;");
+		const skillDir = join(root, ".agents", "skills", "fixture-skill");
+		await mkdir(skillDir, { recursive: true });
+		await writeFile(
+			join(skillDir, "SKILL.md"),
+			"---\nname: fixture-skill\ndescription: Synthetic integration skill\n---\nFixture instructions",
+		);
 		try {
-			for (const control of ["enabled", "disabled", "no-context", "nested-start"] as const) {
+			for (const control of [
+				"enabled",
+				"disabled",
+				"no-context",
+				"nested-start",
+				"managed-enabled",
+				"managed-disabled",
+				"managed-empty",
+			] as const) {
+				const managed = control.startsWith("managed-");
 				const cwd = control === "nested-start" ? nested : root;
 				const agentDir = join(fixture, control);
 				await mkdir(agentDir);
+				isolatedStorage.directory = join(agentDir, "skill-storage");
+				if (managed) {
+					await mkdir(isolatedStorage.directory);
+					await writeFile(
+						join(isolatedStorage.directory, "skill-manager.json"),
+						JSON.stringify({
+							version: 2,
+							defaultMode: control === "managed-empty" ? "searchable" : "full",
+							globalSkills: {},
+							projects: {},
+						}),
+					);
+				}
 				const settings = SettingsManager.inMemory(
 					{ compaction: { enabled: false }, cacheWarming: "off" },
 					{ projectTrusted: true },
@@ -44,9 +82,9 @@ describe("nested guides through Pi 0.99.1 runtime", () => {
 					cwd,
 					agentDir,
 					settingsManager: settings,
-					extensionFactories: [nestedAgents],
+					extensionFactories: managed ? [skillManager, nestedAgents] : [nestedAgents],
 					noContextFiles: control === "no-context",
-					noSkills: true,
+					noSkills: !managed,
 					noPromptTemplates: true,
 					noThemes: true,
 				});
@@ -77,7 +115,10 @@ describe("nested guides through Pi 0.99.1 runtime", () => {
 							throw new Error(error.error);
 						},
 					});
-					session.extensionRunner.setFlagValue("nested-agents", control !== "disabled");
+					session.extensionRunner.setFlagValue(
+						"nested-agents",
+						control !== "disabled" && control !== "managed-disabled",
+					);
 					const requests: Context[] = [];
 					const calls: string[] = [];
 					session.subscribe((event) => {
@@ -115,6 +156,16 @@ describe("nested guides through Pi 0.99.1 runtime", () => {
 					);
 					const first = JSON.stringify(requests[0]);
 					const last = JSON.stringify(requests.at(-1));
+					if (managed) {
+						const expectedCount = control === "managed-empty" ? 0 : 1;
+						expect(first.match(/<name>fixture-skill<\/name>/g) ?? []).toHaveLength(expectedCount);
+						expect(first).toContain(parent);
+						const system = requests[0]?.messages[0];
+						expect(system?.role).toBe("system");
+						if (system?.role === "system") {
+							expect(system.sections?.project_context).toContain(parent);
+						}
+					}
 					if (control === "nested-start") {
 						expect(first).toContain(marker);
 						expect(calls).toEqual([]);
@@ -122,7 +173,7 @@ describe("nested guides through Pi 0.99.1 runtime", () => {
 						expect(first).not.toContain(marker);
 						expect(calls).toEqual(["read"]);
 						expect(last).toContain("export const originalSource = 42;");
-						if (control === "enabled") {
+						if (control === "enabled" || control === "managed-enabled" || control === "managed-empty") {
 							expect(last).toContain(marker);
 							expect(last.match(new RegExp(marker, "g"))).toHaveLength(1);
 							const projectedRead = requests
