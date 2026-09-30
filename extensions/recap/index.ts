@@ -134,6 +134,7 @@ export default function idleRecap(pi: ExtensionAPI): void {
 	let request: AbortController | undefined;
 	let generation = 0;
 	let currentCtx: ExtensionContext | undefined;
+	let unsubscribeInput: (() => void) | undefined;
 
 	const clear = () => {
 		generation++;
@@ -215,12 +216,27 @@ export default function idleRecap(pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", (_event, ctx) => {
+		unsubscribeInput?.();
 		currentCtx = ctx;
 		clear();
+		if (ctx.mode === "tui") {
+			unsubscribeInput = ctx.ui.onTerminalInput(() => {
+				// Postpone an existing recap, never start a new model request merely
+				// because the user navigated or typed after a recap was displayed.
+				if (ctx.isIdle() && (timer || request)) schedule(ctx);
+				else clear();
+				return undefined;
+			});
+		}
 	});
 	pi.on("input", () => clear());
 	pi.on("agent_start", () => clear());
 	pi.on("agent_settled", (_event, ctx) => schedule(ctx));
 	pi.on("session_tree", (_event, ctx) => schedule(ctx));
-	pi.on("session_shutdown", () => clear());
+	pi.on("session_shutdown", () => {
+		unsubscribeInput?.();
+		unsubscribeInput = undefined;
+		clear();
+		currentCtx = undefined;
+	});
 }

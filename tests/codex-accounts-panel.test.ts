@@ -145,10 +145,10 @@ describe("Codex account tabs", () => {
 			label: `Account ${i}`,
 		}));
 		const { text, panel } = setup({ accounts: many, focusKey: "19" });
-		expect(text(40).split("\n")[2]).toContain("Account 19");
+		expect(text(40).split("\n")[1]).toContain("Account 19");
 		expect(text(40)).toContain("20 / 20");
 		panel.handleInput("\t");
-		expect(text(40).split("\n")[2]).toContain("Account 0");
+		expect(text(40).split("\n")[1]).toContain("Account 0");
 	});
 	it("fits the populated dashboard in a standard 24-row terminal", () => {
 		expect(setup().panel.render(80).length).toBeLessThanOrEqual(24);
@@ -157,8 +157,9 @@ describe("Codex account tabs", () => {
 		const custom = vi.fn(async (factory) => {
 			const done = vi.fn();
 			const requestRender = vi.fn();
-			const component = factory({ requestRender }, theme, {}, done);
-			expect(component).toBeInstanceOf(AccountPanel);
+			const component = factory({ requestRender, terminal: { rows: 8 } }, theme, {}, done);
+			expect(component.render(30).length).toBeLessThanOrEqual(8);
+			expect(component.render(30).every((line: string) => visibleWidth(line) <= 30)).toBe(true);
 			component.handleInput("\t");
 			component.handleInput("\r");
 			expect(requestRender).toHaveBeenCalled();

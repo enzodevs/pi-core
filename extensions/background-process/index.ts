@@ -558,7 +558,7 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 				return;
 			}
 			if (!ctx.hasUI) return;
-			await showProcesses(ctx, recentRuns, id || undefined);
+			await showProcesses(ctx, recentRuns, id || undefined, stop);
 		},
 	});
 

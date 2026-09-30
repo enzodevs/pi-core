@@ -1,5 +1,6 @@
 import type { BuildSystemPromptOptions, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type Component, Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { displayText, lineWindow, sectionPanel, wrapped } from "../ui/sections.js";
 import { type ContextView, contextFileSource, estimateTextTokens } from "./core.js";
 
 interface InspectorData {
@@ -27,39 +28,87 @@ export async function showContextInspector(
 		let view = initialView;
 		let top = 0;
 		let selected = 0;
+		let detailMode = false;
+		let detailTop = 0;
 		const component: Component = {
 			invalidate() {},
 			render(width) {
-				const safeWidth = Math.max(12, width);
+				const safeWidth = Math.max(1, width);
 				const items = listItems(view, data);
+				if (items && detailMode) {
+					const current = items[selected];
+					const lines = wrapped(current?.detail ?? "Nothing selected.", Math.max(1, width));
+					const viewport = lineWindow(lines, Math.max(0, tui.terminal.rows - 3), detailTop);
+					detailTop = viewport.top;
+					return sectionPanel(
+						[
+							renderTabs(view, safeWidth, theme),
+							theme.fg("accent", displayText(current?.title ?? "Details")),
+						],
+						viewport.lines,
+						[theme.fg("dim", "↑↓/Pg scroll · Home/End · Esc list · Tab panel")],
+						safeWidth,
+						tui.terminal.rows,
+					);
+				}
 				if (items) {
-					const visibleItems = Math.max(2, Math.floor((tui.terminal.rows - 11) / 2));
+					const visibleItems = Math.max(1, Math.floor((tui.terminal.rows - 8) / 2));
 					if (selected < top) top = selected;
 					if (selected >= top + visibleItems) top = selected - visibleItems + 1;
-					return [
-						renderTabs(view, safeWidth, theme),
-						...renderInventory(view, items, selected, top, visibleItems, safeWidth, theme),
-					];
+					return sectionPanel(
+						[renderTabs(view, safeWidth, theme), theme.fg("muted", panelPurpose(view))],
+						renderInventory(view, items, selected, top, visibleItems, safeWidth, theme).slice(0, -2),
+						[theme.fg("dim", "↑↓ select · Pg/Home/End · Enter details · Tab panel · Esc close")],
+						safeWidth,
+						tui.terminal.rows,
+					);
 				}
-				const bodyWidth = Math.max(8, safeWidth - 2);
-				const content = data.contents[view];
+				const bodyWidth = Math.max(1, safeWidth);
+				const content = displayText(data.contents[view]);
 				const summary = view === "summary" ? content.split("\n") : undefined;
 				const source = summary ? renderSummary(summary, bodyWidth, theme) : styledRaw(view, content, theme);
 				const lines = source.flatMap((line) => wrapTextWithAnsi(line || " ", bodyWidth));
-				const visibleRows = Math.max(3, tui.terminal.rows - 5);
+				const visibleRows = Math.max(0, tui.terminal.rows - 3);
 				top = Math.min(top, Math.max(0, lines.length - visibleRows));
-				return [
-					renderTabs(view, safeWidth, theme),
-					...lines.slice(top, top + visibleRows).map((line) => ` ${truncateToWidth(line, bodyWidth)}`),
-					theme.fg(
-						"dim",
-						`${top + 1}-${Math.min(lines.length, top + visibleRows)}/${lines.length}  ↑↓ scroll  PgUp/PgDn jump  Esc close`,
-					),
-				];
+				return sectionPanel(
+					[renderTabs(view, safeWidth, theme), theme.fg("muted", panelPurpose(view))],
+					lines.slice(top, top + visibleRows),
+					[
+						theme.fg(
+							"dim",
+							`${top + 1}–${Math.min(lines.length, top + visibleRows)}/${lines.length} · ↑↓/Pg scroll · Tab panel · Esc close`,
+						),
+					],
+					safeWidth,
+					tui.terminal.rows,
+				);
 			},
 			handleInput(input) {
 				const page = Math.max(3, tui.terminal.rows - 8);
-				if (matchesKey(input, Key.escape) || matchesKey(input, Key.enter)) return done();
+				if (matchesKey(input, Key.escape)) {
+					if (detailMode) {
+						detailMode = false;
+						tui.requestRender();
+						return;
+					}
+					return done();
+				}
+				if (detailMode && !matchesKey(input, Key.tab) && !matchesKey(input, Key.shift("tab"))) {
+					if (matchesKey(input, Key.home)) detailTop = 0;
+					else if (matchesKey(input, Key.end)) detailTop = Number.MAX_SAFE_INTEGER;
+					else if (matchesKey(input, Key.up)) detailTop = Math.max(0, detailTop - 1);
+					else if (matchesKey(input, Key.down)) detailTop += 1;
+					else if (matchesKey(input, Key.pageUp)) detailTop = Math.max(0, detailTop - page);
+					else if (matchesKey(input, Key.pageDown)) detailTop += page;
+					tui.requestRender();
+					return;
+				}
+				if (matchesKey(input, Key.enter) && listItems(view, data)?.length) {
+					detailMode = true;
+					detailTop = 0;
+					tui.requestRender();
+					return;
+				}
 				if (matchesKey(input, Key.tab) || matchesKey(input, Key.shift("tab"))) {
 					const direction = matchesKey(input, Key.shift("tab")) ? -1 : 1;
 					const index = CONTEXT_PANELS.indexOf(view);
@@ -67,6 +116,8 @@ export async function showContextInspector(
 						CONTEXT_PANELS[(index + direction + CONTEXT_PANELS.length) % CONTEXT_PANELS.length] ?? "summary";
 					top = 0;
 					selected = 0;
+					detailMode = false;
+					detailTop = 0;
 					tui.requestRender();
 					return;
 				}
@@ -101,11 +152,37 @@ const CONTEXT_PANELS: readonly ContextView[] = [
 	"payload",
 ];
 
+function panelPurpose(view: ContextView): string {
+	return {
+		summary: "What occupies context?",
+		files: "Which files are included?",
+		skills: "Which skills can the model see?",
+		tools: "Which tools are active?",
+		messages: "What conversation is included?",
+		system: "What instructions are sent?",
+		payload: "What was sent to the provider?",
+	}[view];
+}
+
 function renderTabs(view: ContextView, width: number, theme: ThemeLike): string {
-	const tabs = CONTEXT_PANELS.map((panel) =>
-		panel === view ? theme.fg("accent", theme.bold(`[${panel}]`)) : theme.fg("dim", panel),
+	const labels: Record<ContextView, string> = {
+		summary: "Budget",
+		files: "Files",
+		skills: "Skills",
+		tools: "Tools",
+		messages: "Conversation",
+		system: "Instructions",
+		payload: "Provider payload",
+	};
+	const focused = theme.fg("accent", theme.bold(`[${labels[view]}]`));
+	const rest = CONTEXT_PANELS.filter((panel) => panel !== view)
+		.map((panel) => theme.fg("dim", labels[panel]))
+		.join(" · ");
+	return truncateToWidth(
+		`${focused} ${CONTEXT_PANELS.indexOf(view) + 1}/${CONTEXT_PANELS.length} · ${rest}`,
+		Math.max(0, width),
+		"…",
 	);
-	return truncateToWidth(`${tabs.join("  ")}   ${theme.fg("dim", "Tab/⇧Tab")}`, width);
 }
 
 function listItems(view: ContextView, data: InspectorData): InspectorItem[] | undefined {
@@ -174,18 +251,18 @@ function renderInventory(
 		const active = index === selected;
 		lines.push(
 			truncateToWidth(
-				`${active ? theme.fg("accent", "›") : " "} ${active ? theme.bold(item.title) : item.title}`,
+				`${active ? theme.fg("accent", "›") : " "} ${active ? theme.bold(displayText(item.title)) : displayText(item.title)}`,
 				width,
 			),
 		);
-		lines.push(truncateToWidth(`  ${theme.fg(active ? "muted" : "dim", item.meta)}`, width));
+		lines.push(truncateToWidth(`  ${theme.fg(active ? "muted" : "dim", displayText(item.meta))}`, width));
 	}
 	if (current) {
 		lines.push("", theme.fg("accent", theme.bold("Selected")));
-		for (const line of current.detail
+		for (const line of displayText(current.detail)
 			.split("\n")
 			.flatMap((value) => wrapTextWithAnsi(value, bodyWidth))
-			.slice(0, 4))
+			.slice(0, 1))
 			lines.push(` ${theme.fg("muted", line)}`);
 	}
 	lines.push(

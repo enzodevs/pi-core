@@ -19,7 +19,6 @@
 	"files": [
 		"extensions",
 		"skills",
-		"themes",
 		"CONTEXT-HYGIENE.md",
 		"LICENSE",
 		"README.md"
@@ -28,17 +27,14 @@
 		"skills": [
 			"./skills/analyze-sessions"
 		],
-		"themes": [
-			"./themes/interstellar.json"
-		],
 		"extensions": [
 			"./extensions/skill-manager/index.ts",
 			"./extensions/fast-mode/index.ts",
 			"./extensions/file-autocomplete/index.ts",
 			"./extensions/footer/index.ts",
+			"./extensions/ui/index.ts",
 			"./extensions/session-cwd/index.ts",
 			"./extensions/nested-agents/index.ts",
-			"./extensions/interstellar/index.ts",
 			"./extensions/recap/index.ts",
 			"./extensions/session-title/index.ts",
 			"./extensions/draft-toggle/index.ts",

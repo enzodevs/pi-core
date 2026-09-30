@@ -4,8 +4,9 @@ import { open, unlink } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { responsivePanel } from "../ui/presentation.js";
 
 const STATUS_ID = "pi-core-sudo";
 const MAX_COMMAND_BYTES = 8 * 1024;
@@ -198,23 +199,37 @@ async function promptPassword(ctx: ExtensionContext): Promise<Buffer | undefined
 	const username = userInfo().username;
 	const value = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
 		let password = "";
-		return {
-			render(width: number) {
-				return [
-					truncateToWidth(theme.fg("accent", theme.bold(`sudo password for ${username}`)), width),
-					truncateToWidth(`${theme.fg("muted", "> ")}${"•".repeat([...password].length)}`, width),
-					truncateToWidth(theme.fg("dim", "enter confirm • esc cancel"), width),
-				];
+		let focused = false;
+		return responsivePanel(
+			{
+				get focused() {
+					return focused;
+				},
+				set focused(value: boolean) {
+					focused = value;
+				},
+				render(width: number) {
+					return [
+						truncateToWidth(theme.fg("accent", theme.bold(`sudo password for ${username}`)), width),
+						`${theme.fg("muted", "> ")}${"•".repeat(Math.min([...password].length, Math.max(0, width - 2)))}${focused ? CURSOR_MARKER : ""}`,
+						truncateToWidth(theme.fg("dim", "Enter confirm · Ctrl+U clear · Esc cancel"), width),
+					];
+				},
+				handleInput(data: string) {
+					if (matchesKey(data, Key.enter)) return done(password);
+					if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) return done(null);
+					if (matchesKey(data, Key.backspace)) password = [...password].slice(0, -1).join("");
+					else if (matchesKey(data, Key.ctrl("u"))) password = "";
+					else if (!/[\p{Cc}]/u.test(data)) password += data;
+					tui.requestRender();
+				},
+				invalidate() {},
+				dispose() {
+					password = "";
+				},
 			},
-			handleInput(data: string) {
-				if (matchesKey(data, Key.enter)) return done(password);
-				if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) return done(null);
-				if (matchesKey(data, Key.backspace)) password = [...password].slice(0, -1).join("");
-				else if (!data.includes("\u001b") && !data.includes("\n") && !data.includes("\r")) password += data;
-				tui.requestRender();
-			},
-			invalidate() {},
-		};
+			tui,
+		);
 	});
 	return value === null ? undefined : Buffer.from(value);
 }

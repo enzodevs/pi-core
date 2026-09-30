@@ -1,6 +1,12 @@
-import { buildSessionContext, type convertToLlm, SessionManager } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
 import {
+	buildSessionContext,
+	type convertToLlm,
+	type ExtensionAPI,
+	type ExtensionContext,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
+import idleRecap, {
 	boundedRecapMessages,
 	latestAssistantTextLength,
 	MIN_RECAP_ASSISTANT_CHARS,
@@ -12,6 +18,46 @@ import {
 	RECAP_MODEL_PROVIDER,
 	recapMessages,
 } from "../extensions/recap/index.js";
+
+describe("recap terminal observer", () => {
+	it("does not start extra model requests from terminal activity and unsubscribes", () => {
+		vi.useFakeTimers();
+		try {
+			const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+			let observe: (() => unknown) | undefined;
+			const unsubscribe = vi.fn();
+			const ctx = {
+				mode: "tui",
+				model: {},
+				isIdle: () => true,
+				ui: {
+					setWidget: vi.fn(),
+					onTerminalInput: (handler: () => unknown) => {
+						observe = handler;
+						return unsubscribe;
+					},
+				},
+			} as unknown as ExtensionContext;
+			idleRecap({
+				on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => void) => {
+					handlers.set(event, handler);
+				},
+			} as unknown as ExtensionAPI);
+			handlers.get("session_start")?.({}, ctx);
+			expect(observe?.()).toBeUndefined();
+			expect(vi.getTimerCount()).toBe(0);
+			handlers.get("agent_settled")?.({}, ctx);
+			expect(vi.getTimerCount()).toBe(1);
+			expect(observe?.()).toBeUndefined();
+			expect(vi.getTimerCount()).toBe(1);
+			handlers.get("session_shutdown")?.({}, ctx);
+			expect(unsubscribe).toHaveBeenCalledOnce();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
 
 describe("idle recap", () => {
 	it("prefers authenticated Codex Spark and otherwise keeps the active model", () => {

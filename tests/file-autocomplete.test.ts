@@ -98,6 +98,22 @@ describe("project file autocomplete", () => {
 		expect(items.map((item) => item.description)).toEqual(["a/file.ts", "file.ts"]);
 	});
 
+	it("prioritizes explicit directory queries", () => {
+		const query = extractAtFileQuery("@src/in");
+		if (!query) throw new Error("Expected query");
+		expect(rankFiles(["docs/src/in.ts", "src/index.ts"], query)[0]?.description).toBe("src/index.ts");
+	});
+
+	it("sanitizes terminal controls without changing the inserted filename", () => {
+		const query = extractAtFileQuery("@bad");
+		if (!query) throw new Error("Expected query");
+		const path = "src/bad\u001b[31m\u0007.ts";
+		const item = rankFiles([path], query)[0];
+		expect(item.value).toBe(`@${path}`);
+		expect(item.label).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+		expect(item.description).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+	});
+
 	it("quotes completion values for paths containing spaces", () => {
 		const query = extractAtFileQuery("attach @guide");
 		if (!query) throw new Error("Expected @ query");

@@ -61,6 +61,11 @@ function searchableFiles(files: readonly string[]): SearchableFile[] {
 
 function scorePath(file: SearchableFile, needle: string): number {
 	if (!needle) return 1_000 - Math.min(file.filePath.length, 999);
+	// An explicit directory query should prioritize that path, not unrelated basenames.
+	if (needle.includes("/")) {
+		if (file.lowerPath === needle) return 12_000;
+		if (file.lowerPath.startsWith(needle)) return 11_000 - Math.min(file.lowerPath.length, 999);
+	}
 	if (file.lowerName === needle) return 10_000;
 	if (file.lowerName.startsWith(needle)) return 8_000 - file.lowerName.length;
 	if (file.lowerName.includes(needle)) return 6_000 - file.lowerName.indexOf(needle);
@@ -102,7 +107,8 @@ export function rankFiles(files: readonly string[], query: AtFileQuery, limit = 
 	}
 	return top.map(({ filePath, name }) => ({
 		value: completionValue(filePath, query.quoted),
-		label: name,
-		description: filePath,
+		// Filenames are untrusted terminal content; keep insertion values unchanged.
+		label: name.replace(/[\p{Cc}\p{Cf}]/gu, "�"),
+		description: filePath.replace(/[\p{Cc}\p{Cf}]/gu, "�"),
 	}));
 }

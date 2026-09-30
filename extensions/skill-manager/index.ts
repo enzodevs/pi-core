@@ -143,6 +143,7 @@ export default async function skillManager(pi: ExtensionAPI) {
 					projectMode: config.projects[project]?.skills[skill.name],
 				})),
 				(changedScope, name, mode) => {
+					const previous = config;
 					if (mode === "inherit") {
 						config =
 							changedScope === "global"
@@ -154,11 +155,20 @@ export default async function skillManager(pi: ExtensionAPI) {
 								? setGlobalSkillMode(config, name, mode)
 								: setProjectSkillMode(config, project, name, mode);
 					}
-					pendingSave = pendingSave.then(() => saveConfig(paths.config, config));
+					const snapshot = config;
+					pendingSave = pendingSave
+						.catch(() => {})
+						.then(() => saveConfig(paths.config, snapshot))
+						.catch((error) => {
+							config = previous;
+							throw error;
+						});
+					return pendingSave;
 				},
 				scope,
 			);
-			await pendingSave;
+			// Persistence errors are shown in the panel; the prior config remains active.
+			await pendingSave.catch(() => {});
 			await refreshIndex(project, loadedSkills);
 		},
 	});

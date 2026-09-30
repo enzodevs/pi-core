@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, type EditorTheme, Image, Text, type TUI } from "@earendil-works/pi-tui";
+import { Container, type EditorTheme, Image, Text, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import { ClipboardImageDraft } from "./state.js";
+import { showImages } from "./ui.js";
 
 function mimeTypeForPreview(filePath: string): string {
 	const extension = filePath.slice(filePath.lastIndexOf(".") + 1).toLowerCase();
@@ -87,6 +89,19 @@ class ImageClipboardEditor extends CustomEditor {
 export default function imageClipboard(pi: ExtensionAPI): void {
 	let draft = new ClipboardImageDraft();
 	let ownsEditor = false;
+	let refreshPreviews: (() => void) | undefined;
+
+	pi.registerShortcut("ctrl+alt+i", {
+		description: "Inspect or remove attached images without submitting the prompt",
+		handler: async (ctx) => {
+			if (ctx.mode !== "tui" || !ownsEditor || !refreshPreviews) return;
+			if (draft.previews().length === 0) {
+				ctx.ui.notify("No images attached.", "info");
+				return;
+			}
+			await showImages(ctx, draft, refreshPreviews);
+		},
+	});
 
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
@@ -97,27 +112,59 @@ export default function imageClipboard(pi: ExtensionAPI): void {
 				ctx.ui.setWidget("image-clipboard", undefined);
 				return;
 			}
-			ctx.ui.setWidget("image-clipboard", (_tui, theme) => {
+			ctx.ui.setWidget("image-clipboard", (tui, theme) => {
 				const container = new Container();
-				for (const preview of previews) {
-					container.addChild(new Text(theme.fg("muted", preview.placeholder), 0, 0));
+				const labels = previews
+					.slice(0, 2)
+					.map(
+						(preview) =>
+							`${preview.placeholder} ${basename(preview.filePath).replace(/[\p{Cc}\p{Cf}]/gu, "�")}`,
+					);
+				for (const [index, preview] of previews.slice(0, 2).entries()) {
+					container.addChild(new Text(theme.fg("muted", labels[index]), 0, 0));
 					try {
 						container.addChild(
 							new Image(
 								readFileSync(preview.filePath).toString("base64"),
 								mimeTypeForPreview(preview.filePath),
 								{ fallbackColor: (text) => theme.fg("muted", text) },
-								{ maxWidthCells: 40, maxHeightCells: 12, filename: preview.placeholder },
+								{ maxWidthCells: 40, maxHeightCells: 4, filename: preview.placeholder },
 							),
 						);
 					} catch {
 						container.addChild(new Text(theme.fg("warning", "Preview unavailable"), 0, 0));
 					}
 				}
-				return container;
+				return {
+					render(width) {
+						const summary = `${previews.length} ${previews.length === 1 ? "image" : "images"} attached · Ctrl+Alt+I inspect/remove`;
+						const header = truncateToWidth(theme.fg("accent", summary), Math.max(0, width), "…");
+						const body =
+							width < 36 || tui.terminal.rows < 18
+								? labels.map((label) => truncateToWidth(theme.fg("muted", label), Math.max(0, width), "…"))
+								: container.render(width);
+						return [
+							header,
+							...body,
+							...(previews.length > 2
+								? [
+										truncateToWidth(
+											theme.fg("dim", `+${previews.length - 2} more · Ctrl+Alt+I shows all`),
+											Math.max(0, width),
+											"…",
+										),
+									]
+								: []),
+						];
+					},
+					invalidate() {
+						container.invalidate();
+					},
+				};
 			});
 		};
 
+		refreshPreviews = updatePreviews;
 		if (ctx.ui.getEditorComponent()) {
 			ctx.ui.notify("Image clipboard disabled because another extension owns the editor.", "warning");
 			return;
@@ -153,6 +200,7 @@ export default function imageClipboard(pi: ExtensionAPI): void {
 		ctx.ui.setWidget("image-clipboard", undefined);
 		if (ownsEditor) ctx.ui.setEditorComponent(undefined);
 		ownsEditor = false;
+		refreshPreviews = undefined;
 		await draft.reset();
 		draft = new ClipboardImageDraft();
 	});

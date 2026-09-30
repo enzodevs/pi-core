@@ -37,7 +37,10 @@ describe("/ps TUI", () => {
 			typeof selected.log
 		>;
 		const view = renderProcessView([first, selected], selected.id, 48, 16, theme);
-		expect(view.join("\n")).toContain("Process ccccdddd");
+		expect(view.join("\n")).toContain("Command: printf hello");
+		expect(
+			renderProcessView([selected], selected.id, 48, 16, theme, { pane: "details" }).join("\n"),
+		).toContain("Process ccccdddd");
 		expect(view.join("\n")).toContain("finished");
 		expect(view.join("\n")).not.toContain("[31m");
 		expect(view.join("\n")).not.toContain("\u0007");

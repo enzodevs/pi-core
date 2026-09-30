@@ -23,7 +23,6 @@
   <a href="#ask-the-user"><strong>Questions</strong></a> ·
   <a href="#temporary-sudo"><strong>Sudo</strong></a> ·
   <a href="#minimal-footer"><strong>Footer</strong></a> ·
-  <a href="#interstellar-theme"><strong>Theme</strong></a> ·
   <a href="#idle-recap"><strong>Recap</strong></a> ·
   <a href="#openai-fast-mode"><strong>Fast mode</strong></a> ·
   <a href="CONTEXT-HYGIENE.md"><strong>Context hygiene</strong></a>
@@ -58,7 +57,6 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Opt-in personal WhatsApp retrieval** — pair a read-only Baileys client only when requested and expose bounded message references and local audio transcripts.
 - **Provider-scoped Fast mode** — injects `service_tier: "priority"` only for OAuth-backed `openai-codex` requests.
 - **Responsive minimal footer** — model, thinking, branch, context, cost, and extension state without render-time I/O.
-- **Interstellar theme** — a high-contrast deep-space palette, orbital π startup art, and a restrained animated working indicator.
 - **Ephemeral idle recap** — after three quiet minutes, show one tool-free sentence describing where the conversation stopped.
 - **Automatic session titles** — name new sessions from their first completed exchange without touching conversation history.
 - **Node-first TypeScript** — no Bun runtime APIs and no runtime framework beyond Pi's extension surface.
@@ -152,7 +150,7 @@ Or update one skill directly. Project scope is the default; `inherit` removes an
 /skill-manager --global brave-ui-qa inherit
 ```
 
-`/skill-manager` opens at project scope and `/skill-manager --global` opens at global scope. Inside either view, Tab or Shift+Tab switches between the project and global tabs. Use Up/Down to navigate skills, Left/Right or Enter/Space to change modes, Home/End or Page Up/Page Down to jump, and Escape to close. The manager shows whether each effective value comes from the project, a global override, or the default, and adapts its detail and row count to the terminal size.
+`/skill-manager` opens at project scope and `/skill-manager --global` opens at global scope. Inside either view, Tab or Shift+Tab switches between the project and global tabs. Press `/` to search names and descriptions using Pi's native input; Enter returns to navigation and Escape clears the search. Use Up/Down to navigate skills, Left/Right or Enter/Space to change modes, Home/End or Page Up/Page Down to jump, and Escape to close. The manager shows whether each effective value comes from the project, a global override, or the default, and adapts its detail and row count to the terminal size.
 
 The model receives two compact tools for enabled skills:
 
@@ -307,17 +305,28 @@ It displays the active model and thinking level, a renamed session's title, Git 
 
 Rendering performs no filesystem, Git, network, or history scans. Git updates use Pi's footer watcher, cost is accumulated from message events, and width-safe Unicode characters avoid a Nerd Font dependency.
 
-## Interstellar theme
+## Keyboard-first interface
 
-Pi Core includes an `interstellar` theme: a calm, high-contrast deep-space palette with ice-blue navigation, warm starlight headings, and explicit success/error surfaces. Its companion extension replaces Pi's startup header with orbital π art, sets a terminal title, and uses a subtle four-frame activity indicator. It adds no model-visible tools or prompts.
+Pi Core uses Pi's own theme and component runtime rather than starting another terminal renderer. Task-specific panels reserve their own headers, content viewports, and keyboard controls: resizing does not silently discard access to long commands, context, or descriptions. See [TUI architecture](docs/tui-ux.md) and [manual validation steps](docs/test-tui.md).
 
-Select it once in Pi with `/settings` → **Theme** → `interstellar`, then run `/reload` in an existing session to apply the header extension. The theme is also discoverable from the installed package's `themes/` directory.
+- **Ctrl+Shift+S** parks a text draft, restores it into an empty editor, or swaps it with another prompt without overwriting either. A compact indicator below the editor shows when a draft is parked; the prompt itself stays hidden. Attached-image prompts cannot be parked because attachments belong to the live editor. **Ctrl+Alt+D** opens a read-only, scrollable preview of the parked draft without changing the current prompt.
+- **`@` autocomplete** prioritizes explicit directory prefixes, follows working-directory changes, and sanitizes filenames for display without changing inserted paths.
+- **Clipboard images** show compact filenames and at most two small previews. **Ctrl+Alt+I** lists all attachments, previews the selected image, and offers confirmed detachment with `D`. `V` opens the full file path; originals are never deleted.
+- **Questions** pin the prompt above the answers. Tab opens scrollable question/context/selected-description content. Escape returns without canceling; unfinished Other text survives going back. Multi-select supports Ctrl+Enter to submit.
+- **Processes (`/ps`)** show recognizable commands, directories, state and recent output. Tab cycles overview → scrollable logs → full command/directory details. End resumes live logs. `S` offers an in-panel stop confirmation; Escape keeps the process running.
+- **Skills** explain the selected mode and inheritance and acknowledge actual save success/failure. Failed writes retain the previous setting and can be retried.
+- **Context (`/context`)** uses purpose-driven labels. Enter opens full inventory details; Escape returns to the selection. Tab still cycles panels.
+- **Codex accounts** retain active/default distinctions, quota and action consequences. `G` navigates action groups; `V` opens scrollable limits, renewal, origin, and consequences without activating a different account.
+
+The former Interstellar header, theme, and custom animation have been removed. Pi's native header and theme remain in control; working text stays visible, but the animated indicator is hidden. If you previously selected `interstellar`, select an available theme in `/settings`; Pi Core does not rewrite your personal settings.
+
+These UI changes add no prompts, tool schemas, or conversation messages. Text draft state continues to use non-model custom session entries. Existing tools and recap retain their previous model behavior.
 
 ## Idle recap
 
 After Pi settles and remains idle for three minutes, Pi Core generates one compact line of up to three terse phrases describing the task, progress, and immediate next step. It appears quietly below the editor and disappears when work resumes.
 
-The recap prefers the authenticated `openai-codex/gpt-5.3-codex-spark` model at low reasoning and falls back to the active session model if Spark is unavailable or a Spark request fails. It exposes no tools and is never written to session history or added to model context. Stale or cancelled results are discarded. Pi extensions cannot observe raw editor keystrokes, so the timer resets on submitted input and agent/session activity rather than cursor movement.
+The recap prefers the authenticated `openai-codex/gpt-5.3-codex-spark` model at low reasoning and falls back to the active session model if Spark is unavailable or a Spark request fails. It exposes no tools and is never written to session history or added to model context. Stale or cancelled results are discarded. The timer also resets on terminal input while idle, so typing or moving the cursor postpones the recap. The listener never consumes input.
 
 ## Automatic session titles
 

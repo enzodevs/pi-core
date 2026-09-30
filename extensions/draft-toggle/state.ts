@@ -14,10 +14,12 @@ interface DraftEntry {
 export type DraftToggleResult =
 	| { action: "saved"; draft: string; editorText: "" }
 	| { action: "restored"; draft: undefined; editorText: string }
+	| { action: "swapped"; draft: string; editorText: string }
 	| { action: "empty"; draft: undefined; editorText: "" };
 
 export function toggleDraft(draft: string | undefined, editorText: string): DraftToggleResult {
 	if (editorText.length > 0) {
+		if (draft !== undefined) return { action: "swapped", draft: editorText, editorText: draft };
 		return { action: "saved", draft: editorText, editorText: "" };
 	}
 	if (draft !== undefined) {
