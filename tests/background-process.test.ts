@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	type BackgroundProcessRun,
 	detailedProcessStatus,
@@ -169,15 +169,23 @@ describe("background process", () => {
 	it("force-kills stubborn descendants without retaining a stale group timer", async () => {
 		const store = new ProcessLogStore({ root: root() });
 		const log = store.create("1234abcd");
-		const result = await runBackgroundProcess({
-			command: `sh -c 'trap "" TERM; sleep 30' & echo CHILD_PID=$!; wait`,
+		let stop: (() => void) | undefined;
+		const completion = runBackgroundProcess({
+			command: `sh -c 'trap "" TERM; echo CHILD_PID=$$; sleep 30' & wait`,
 			cwd: "/tmp",
 			mode: "service",
 			log,
 			onSpawn(handle) {
-				setTimeout(() => handle.stop(), 50);
+				stop = handle.stop;
 			},
 		});
+		try {
+			await vi.waitFor(() => expect(log.search("CHILD_PID=").matches).toBe(1));
+		} finally {
+			stop?.();
+			await completion;
+		}
+		const result = await completion;
 		const pid = Number.parseInt(result.output.match(/CHILD_PID=(\d+)/u)?.[1] ?? "", 10);
 
 		expect(result.status).toBe("stopped");
@@ -198,10 +206,12 @@ describe("background process", () => {
 				stop = handle.stop;
 			},
 		});
-		await new Promise((resolve) => setTimeout(resolve, 40));
-
-		expect(log.search("server ready").matches).toBe(1);
-		stop?.();
+		try {
+			await vi.waitFor(() => expect(log.search("server ready").matches).toBe(1));
+		} finally {
+			stop?.();
+			await completion;
+		}
 		expect((await completion).status).toBe("stopped");
 	});
 

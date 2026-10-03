@@ -14,7 +14,16 @@ export async function compactToolResult(
 ): Promise<{ content: ToolResultEvent["content"] } | undefined> {
 	// Start with bash stdout only. File reads/edits, images, multi-part results,
 	// failed commands, truncated output, and historical messages are not touched.
-	if (event.toolName !== "bash" || event.isError || event.content.length !== 1 || signal?.aborted) return;
+	// Scripts filter raw structured results themselves; rewriting nested content
+	// would make Pi drop structuredContent and change the codemode return type.
+	if (
+		event.parentToolCallId ||
+		event.toolName !== "bash" ||
+		event.isError ||
+		event.content.length !== 1 ||
+		signal?.aborted
+	)
+		return;
 	const part = event.content[0];
 	if (part?.type !== "text") return;
 	const details = event.details as

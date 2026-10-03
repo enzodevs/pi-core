@@ -65,17 +65,17 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-ai": "^0.99.1",
-		"@earendil-works/pi-coding-agent": "^0.99.1",
-		"@earendil-works/pi-tui": "^0.99.1",
+		"@earendil-works/pi-ai": "^1.0.0",
+		"@earendil-works/pi-coding-agent": "^1.0.0",
+		"@earendil-works/pi-tui": "^1.0.0",
 		"typebox": "*"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.2.4",
-		"@earendil-works/pi-agent-core": "0.99.1",
-		"@earendil-works/pi-ai": "0.99.1",
-		"@earendil-works/pi-coding-agent": "0.99.1",
-		"@earendil-works/pi-tui": "0.99.1",
+		"@earendil-works/pi-agent-core": "1.0.0",
+		"@earendil-works/pi-ai": "1.0.0",
+		"@earendil-works/pi-coding-agent": "1.0.0",
+		"@earendil-works/pi-tui": "1.0.0",
 		"@types/node": "^24.0.0",
 		"@types/proper-lockfile": "^4.1.4",
 		"@types/qrcode": "1.5.6",

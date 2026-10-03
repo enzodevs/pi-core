@@ -66,7 +66,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 ### Requirements
 
 - Node.js 22.19.0 or newer
-- Pi 0.99.1 (the supported baseline; Pi packages use the 0.99.x compatibility range)
+- Pi 1.0.0 (the supported baseline; Pi peer dependencies use the 1.x compatibility range)
 - A working Pi installation
 
 ### Install from GitHub
@@ -404,9 +404,34 @@ flowchart LR
     Analytics --> Sessions[(Pi session JSONL)]
 ```
 
+## Codemode (opt-in)
+
+Pi 1.0 includes upstream codemode; pi-core does not implement a second sandbox. Enable it in `~/.pi/agent/settings.json` (merge with existing settings):
+
+```json
+{
+  "defaultTools": ["+codemode"],
+  "codemode": { "mode": "on" }
+}
+```
+
+Preserve existing `defaultTools` entries when adding `+codemode`. Reload Pi or start a new session. Mode `on` keeps ordinary tools available; evaluate it before switching to `only`.
+
+Scripts can batch independent calls and filter large results before printing a concise summary. Tool calls are real actions, not a transaction: a script failure does not undo earlier calls. The QuickJS sandbox has no Node, filesystem, or network APIs, but called tools retain their capabilities. Classifier and image-model calls use the session's provider credentials, may upload inputs to that provider, and may incur charges.
+
+Pi-core compatibility boundaries:
+
+- `ask_user_question`, `sudo`, and child `ask_parent` use `model-only` exposure: they stay directly available to the model but cannot be called from scripts. User interaction and privileged approval must not be hidden inside a batch.
+- Session-CWD tools retain Pi's structured output schemas, so scripts receive structured bash results and honor session directory changes.
+- The optional Headroom JSON pilot skips nested calls, preserving the raw structured values that scripts can filter themselves.
+- Opt-in nested project guidance remains limited to direct reads. Codemode reads do not activate nested guides; explicitly read the applicable guide with a direct `read` when needed. Nested result metadata is not promoted into parent guidance.
+- Children retain their explicit tool allowlists and do not inherit codemode or MCP.
+
+`make test` includes local codemode integration tests against the real upstream QuickJS worker: batching/filtering, large structured output, mixed failures, nonzero exits, interactive-tool exclusion, nested-guide isolation, and session-CWD changes. These tests make no classifier, image-generation, or hosted chat requests.
+
 ## Development
 
-Development uses Node.js 24 LTS pinned in `.node-version`; both development and published extensions require Node.js 22.19.0 or newer, matching Pi 0.99.1. All four Pi development packages are pinned to the same version.
+Development uses Node.js 24 LTS pinned in `.node-version`; both development and published extensions require Node.js 22.19.0 or newer, matching Pi 1.0.0. All four Pi development packages are pinned to the same version.
 
 ```bash
 make install
@@ -430,7 +455,7 @@ Compatibility checks cover two additional boundaries:
 - `make compat-package` packs pi-core, installs the tarball into an isolated temporary project with the locked Pi version, and loads every packaged extension.
 - `make compat-latest` copies the repository to an isolated temporary directory, installs the latest published Pi packages, and runs type checking, tests, a package dry run, and `compat:package`. The final check installs the tarball and loads its extensions, catching incompatible peer dependency ranges as well as loader failures. It is intentionally opt-in because it requires network access and may expose an upstream breaking change before pi-core updates its lockfile.
 
-Subagents intentionally launch with `--no-extensions` and an explicit tool allowlist. Since Pi 0.99 this also disables built-in extensions (MCP, codemode, tool search, and llama.cpp); children do not automatically inherit those integrations. Built-in tool orchestration and migration to the new OpenAI ChatGPT provider are not enabled by this compatibility update.
+Subagents intentionally launch with `--no-extensions` and an explicit tool allowlist. This also disables built-in extensions (MCP, codemode, tool search, and llama.cpp); children do not automatically inherit those integrations. Keep that isolation rather than enabling codemode implicitly for children. Migration to the new OpenAI ChatGPT provider is not enabled by this compatibility update.
 
 Set `PI_CORE_KEEP_COMPAT_TEMP=1` to preserve a compatibility command's temporary workspace for diagnosis.
 

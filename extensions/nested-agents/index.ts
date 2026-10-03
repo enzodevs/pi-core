@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, isReadToolResult } from "@earendil-works/pi-coding-agent";
+import { READ_CWD_KEY } from "../session-cwd/index.js";
 import {
 	addNestedGuides,
 	projectRoot,
@@ -63,7 +64,8 @@ export default function nestedAgents(pi: ExtensionAPI): void {
 		if (event.parentToolCallId) return;
 		const activeRoot = root;
 		try {
-			const path = await resolveReadTarget(event.input.path, ctx.cwd);
+			const readCwd = (event.details as typeof event.details & { [READ_CWD_KEY]?: unknown })?.[READ_CWD_KEY];
+			const path = await resolveReadTarget(event.input.path, typeof readCwd === "string" ? readCwd : ctx.cwd);
 			if (!path) return;
 			return {
 				details: { ...event.details, [READ_SCOPE_KEY]: { root: activeRoot, path } },

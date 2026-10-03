@@ -54,6 +54,7 @@ describe("JSON compaction boundary", () => {
 		const compress = vi.fn(async () => "compressed");
 		const save = vi.fn(async () => ({ path: "/original", discard: vi.fn() }));
 		const cases = [
+			event({ parentToolCallId: "codemode-parent", structuredContent: { output: text, exit_code: 0 } }),
 			event({ toolName: "read" }),
 			event({ toolName: "edit" }),
 			event({ toolName: "write" }),

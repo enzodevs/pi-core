@@ -14,6 +14,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Static, type TSchema, Type } from "typebox";
 
+// Tool-result handlers have the startup CWD, not this tool's execution CWD.
+export const READ_CWD_KEY = "piCoreReadCwd";
+
 const ENTRY_TYPE = "session-cwd-state";
 const STATUS_ID = "session-cwd";
 
@@ -36,6 +39,7 @@ export default function sessionCwd(pi: ExtensionAPI): void {
 	let state: CwdState = { current: original, stack: [] };
 
 	const updateStatus = (ctx: ExtensionContext) => {
+		if (!ctx.hasUI) return;
 		const changed = state.current !== original;
 		ctx.ui.setStatus(
 			STATUS_ID,
@@ -62,8 +66,13 @@ export default function sessionCwd(pi: ExtensionAPI): void {
 		const definition = factory(state.current);
 		return {
 			...definition,
-			execute: (id, params, signal, onUpdate, ctx) =>
-				factory(state.current).execute(id, params, signal, onUpdate, ctx),
+			execute: async (id, params, signal, onUpdate, ctx) => {
+				const cwd = state.current;
+				const result = await factory(cwd).execute(id, params, signal, onUpdate, { ...ctx, cwd });
+				return definition.name === "read"
+					? { ...result, details: { ...result.details, [READ_CWD_KEY]: cwd } }
+					: result;
+			},
 		};
 	}
 

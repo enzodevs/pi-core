@@ -27,6 +27,7 @@ function renderOptions(value: unknown): AskOption[] {
 export default function askUserQuestion(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "ask_user_question",
+		exposure: "model-only",
 		label: "Ask User Question",
 		description:
 			"Ask one clarifying, preference, or decision question and wait for the user. Supports free text, one choice, or multiple choices; every choice list includes Other.",

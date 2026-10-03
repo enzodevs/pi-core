@@ -3,6 +3,7 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	ExtensionFactory,
+	ExtensionToolContext,
 	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expectTypeOf, it } from "vitest";
@@ -54,5 +55,8 @@ describe("Pi public API contract", () => {
 		expectTypeOf<ExtensionContext>().toHaveProperty("modelRegistry");
 		expectTypeOf<BuildSystemPromptOptions>().toHaveProperty("skills");
 		expectTypeOf<ToolDefinition>().toHaveProperty("parameters");
+		expectTypeOf<ToolDefinition>().toHaveProperty("exposure");
+		expectTypeOf<ToolDefinition>().toHaveProperty("outputSchema");
+		expectTypeOf<ExtensionToolContext>().toHaveProperty("executeTool");
 	});
 });

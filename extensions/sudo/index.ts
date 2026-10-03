@@ -280,6 +280,7 @@ export default function sudoExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool({
 		name: "sudo",
+		exposure: "model-only",
 		label: "Sudo",
 		description:
 			"Run one shell command with temporary root privileges after explicit user approval. Password entry is masked and stays outside model/session context. Output is bounded to 2000 lines/50KB.",

@@ -837,6 +837,7 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 		});
 		pi.registerTool({
 			name: "ask_parent",
+			exposure: "model-only",
 			label: "Ask Parent",
 			description: "Ask your direct parent one concise blocking question, then wait for its reply.",
 			promptGuidelines: [
