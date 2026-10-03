@@ -20,6 +20,10 @@ Use the repository `Makefile` as the stable command interface:
 
 Keep implementation details in `package.json` scripts; Make targets should remain thin delegates so CI, agents, and contributors share one interface.
 
+## Pi harness upgrades
+
+When the user reports that Pi was updated, asks about a new Pi release, or requests adapting pi-core to it, follow `PI-UPGRADES.md`. Use that on-demand workflow rather than adding a skill or duplicating upgrade instructions in the always-active prompt.
+
 ## Conventions
 
 - Runtime code must work in Node; do not use Bun-only APIs.
