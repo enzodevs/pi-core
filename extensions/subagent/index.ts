@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { createCodemodeExtension, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
 import { AskParentTurnGate, currentAssistantMessage } from "./ask-parent-gate.ts";
@@ -332,7 +332,7 @@ export function normalizePersistedRun(value: PersistedRun): PersistedRun | null 
 	return value;
 }
 
-export default function backgroundAgents(pi: ExtensionAPI): void {
+export default async function backgroundAgents(pi: ExtensionAPI): Promise<void> {
 	if (invalidLineage) return;
 
 	const tuiBridge = childLineage ? createTmuxChildBridge(pi, childLineage, limits) : undefined;
@@ -829,6 +829,8 @@ export default function backgroundAgents(pi: ExtensionAPI): void {
 	});
 
 	if (childLineage) {
+		// Child-local batching, without inheriting MCP or adding paid model APIs.
+		await createCodemodeExtension({ mode: "on", models: false })(pi);
 		const askParentGate = new AskParentTurnGate();
 		pi.on("tool_call", (event, ctx) => askParentGate.intercept(event, currentAssistantMessage(ctx)));
 		pi.on("input", (_event, ctx) => {

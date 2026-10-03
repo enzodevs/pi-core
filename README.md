@@ -237,7 +237,7 @@ Only the top-level parent can request integration, after reviewing the changes a
 
 Verification/integration state survives in the parent session. Interrupted checks require an explicit `verify` retry; an interrupted integration can be retried with the same revision to reconcile an already-updated target without repeating the merge, including after cleanup. `stop` cancels an active verification operation; session replacement aborts checks and preserves an explicit interrupted state. Integration already in its atomic Git update is reconciled rather than assumed undone. Completed worktree runs awaiting integration are retained beyond the recent-status display limit.
 
-Subagent starts are unlimited. Safety limits default to depth 3, six globally concurrent children, 8 KiB tasks, 12 KiB handoffs, 1 KiB questions, and 2 KiB replies. Aggregate `agent_control status` reports temporary global concurrency. Configure limits before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
+Subagent starts are unlimited. Safety limits default to depth 3, six globally concurrent children, 32 KiB tasks, 12 KiB handoffs, 4 KiB questions, and 8 KiB replies. Input envelopes allow substantial instructions and clarifications; handoffs remain compact. There is no subagent-specific tool-call count, execution deadline, or token/dollar budget. Aggregate `agent_control status` reports temporary global concurrency. Configure limits before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
 
 A settled TUI child seals its final handoff, shows a short completion notice, and exits automatically after a brief grace period. Closing a pane early fails that run; stopping it requests an abort and then force-closes an unresponsive pane. Parent branch changes and normal shutdown cancel owned children. `/reload` is different: live tmux children are detached from the retiring extension instance and reattached by the new one using their durable lineage, pane, session, and sidecar metadata. RPC children cannot be reattached and are terminalized safely on reload.
 
@@ -404,9 +404,9 @@ flowchart LR
     Analytics --> Sessions[(Pi session JSONL)]
 ```
 
-## Codemode (opt-in)
+## Codemode (parent opt-in, automatic in children)
 
-Pi 1.0 includes upstream codemode; pi-core does not implement a second sandbox. Enable it in `~/.pi/agent/settings.json` (merge with existing settings):
+Pi 1.0 includes upstream codemode; pi-core does not implement a second sandbox. For the parent session, enable it in `~/.pi/agent/settings.json` (merge with existing settings):
 
 ```json
 {
@@ -425,7 +425,8 @@ Pi-core compatibility boundaries:
 - Session-CWD tools retain Pi's structured output schemas, so scripts receive structured bash results and honor session directory changes.
 - The optional Headroom JSON pilot skips nested calls, preserving the raw structured values that scripts can filter themselves.
 - Opt-in nested project guidance remains limited to direct reads. Codemode reads do not activate nested guides; explicitly read the applicable guide with a direct `read` when needed. Nested result metadata is not promoted into parent guidance.
-- Children retain their explicit tool allowlists and do not inherit codemode or MCP.
+- Every child automatically gets upstream codemode in `on` mode; no parent-facing flag, profile edits, or repeated prompt instructions are required. Scripts can call only the child's allowed tools. Even a profile with no filesystem tools can use pure computation, but gains no filesystem access.
+- Child codemode disables classifier/image-model APIs (`models: false`); batching itself stays local and exposes no additional provider-backed model capabilities. Children do not inherit parent MCP servers or unrelated extensions. `ask_parent` remains directly available, never callable from scripts.
 
 `make test` includes local codemode integration tests against the real upstream QuickJS worker: batching/filtering, large structured output, mixed failures, nonzero exits, interactive-tool exclusion, nested-guide isolation, and session-CWD changes. These tests make no classifier, image-generation, or hosted chat requests.
 
@@ -455,7 +456,7 @@ Compatibility checks cover two additional boundaries:
 - `make compat-package` packs pi-core, installs the tarball into an isolated temporary project with the locked Pi version, and loads every packaged extension.
 - `make compat-latest` copies the repository to an isolated temporary directory, installs the latest published Pi packages, and runs type checking, tests, a package dry run, and `compat:package`. The final check installs the tarball and loads its extensions, catching incompatible peer dependency ranges as well as loader failures. It is intentionally opt-in because it requires network access and may expose an upstream breaking change before pi-core updates its lockfile.
 
-Subagents intentionally launch with `--no-extensions` and an explicit tool allowlist. This also disables built-in extensions (MCP, codemode, tool search, and llama.cpp); children do not automatically inherit those integrations. Keep that isolation rather than enabling codemode implicitly for children. Migration to the new OpenAI ChatGPT provider is not enabled by this compatibility update.
+Subagents intentionally launch with `--no-extensions` and an explicit tool allowlist. The explicitly loaded subagent extension registers upstream codemode locally and the harness includes it automatically; no additional extension or parent flag is needed. Other built-in extensions (MCP, tool search, and llama.cpp) remain disabled. Codemode inherits the child's callable tool permissions, not the parent's tool catalog. Migration to the new OpenAI ChatGPT provider is not enabled by this compatibility update.
 
 Set `PI_CORE_KEEP_COMPAT_TEMP=1` to preserve a compatibility command's temporary workspace for diagnosis.
 

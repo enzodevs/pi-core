@@ -136,6 +136,7 @@ function writeRpc(child: ChildProcessWithoutNullStreams, command: Record<string,
 
 export function buildChildTools(agent: AgentConfig, lineage: ChildLineage): string[] {
 	const tools = new Set(agent.tools ?? []);
+	tools.add("codemode");
 	tools.add("ask_parent");
 	if (lineage.allowedChildren.length > 0 && lineage.depth < lineage.limits.maxDepth) {
 		tools.add("background_agent");

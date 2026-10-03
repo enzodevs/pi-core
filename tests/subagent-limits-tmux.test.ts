@@ -26,6 +26,22 @@ describe("subagent bounds and agent definitions", () => {
 		);
 	});
 
+	it("accepts substantial task/question inputs without increasing output or resource budgets", () => {
+		const limits = resolveSubagentLimits({});
+		expect(limits).toEqual({
+			maxDepth: 3,
+			globalConcurrency: 6,
+			taskBytes: 32 * 1024,
+			handoffBytes: 12 * 1024,
+			questionBytes: 4 * 1024,
+			replyBytes: 8 * 1024,
+		});
+		for (const key of ["taskBytes", "questionBytes", "replyBytes"] as const) {
+			expect(assertBoundedText("x".repeat(limits[key]), key, limits[key])).toHaveLength(limits[key]);
+			expect(() => assertBoundedText("x".repeat(limits[key] + 1), key, limits[key])).toThrow("too large");
+		}
+	});
+
 	it("enforces UTF-8 byte limits rather than character counts", () => {
 		expect(assertBoundedText(" ok ", "task", 2)).toBe("ok");
 		expect(() => assertBoundedText("😀😀", "task", 7)).toThrow("8 bytes");

@@ -7,6 +7,7 @@ import {
 	snapshotRun,
 	truncateUtf8,
 } from "../extensions/subagent/index.js";
+import { DEFAULT_SUBAGENT_LIMITS } from "../extensions/subagent/limits.js";
 
 function managedRun(overrides: Partial<ManagedRun> = {}): ManagedRun {
 	return {
@@ -68,7 +69,7 @@ describe("background agent handoff truncation", () => {
 	it("bounds persisted task and output", () => {
 		const snapshot = snapshotRun(
 			managedRun({
-				task: "t".repeat(10_000),
+				task: "t".repeat(DEFAULT_SUBAGENT_LIMITS.taskBytes + 1000),
 				cwd: "/tmp",
 				status: "complete",
 				delivery: "pending",
@@ -76,7 +77,7 @@ describe("background agent handoff truncation", () => {
 				output: "o".repeat(20_000),
 			}),
 		);
-		expect(Buffer.byteLength(snapshot.task ?? "")).toBeLessThanOrEqual(8 * 1024);
+		expect(Buffer.byteLength(snapshot.task ?? "")).toBeLessThanOrEqual(DEFAULT_SUBAGENT_LIMITS.taskBytes);
 		expect(Buffer.byteLength(snapshot.output ?? "")).toBeLessThanOrEqual(12 * 1024);
 	});
 

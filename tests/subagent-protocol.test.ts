@@ -98,15 +98,17 @@ describe("subagent lineage and delegation", () => {
 		expect(ownsDirectChild(null, ownership(first))).toBe(true);
 	});
 
-	it("preserves explicit tool restrictions while adding only required controls", () => {
+	it("preserves explicit tool restrictions while adding codemode and required controls", () => {
 		expect(buildChildTools(agent(), first)).toEqual([
 			"read",
+			"codemode",
 			"ask_parent",
 			"background_agent",
 			"agent_control",
 		]);
 		expect(buildChildTools(agent({ children: [] }), { ...first, allowedChildren: [] })).toEqual([
 			"read",
+			"codemode",
 			"ask_parent",
 		]);
 		expect(
@@ -114,10 +116,10 @@ describe("subagent lineage and delegation", () => {
 				...first,
 				allowedChildren: [],
 			}),
-		).toEqual(["read", "grep", "ask_parent"]);
+		).toEqual(["read", "grep", "codemode", "ask_parent"]);
 	});
 
-	it("keeps empty or invalid-only profiles restricted to the child control tool", () => {
+	it("keeps empty profiles restricted to computation and the child control tool", () => {
 		const ctx = { model: null, thinkingLevel: "low" } as unknown as ExtensionContext;
 		const restricted = agent({ tools: undefined, children: [] });
 		const args = buildChildArgs(
@@ -126,9 +128,12 @@ describe("subagent lineage and delegation", () => {
 		);
 		const toolsIndex = args.indexOf("--tools");
 
-		expect(buildChildTools(restricted, { ...first, allowedChildren: [] })).toEqual(["ask_parent"]);
+		expect(buildChildTools(restricted, { ...first, allowedChildren: [] })).toEqual([
+			"codemode",
+			"ask_parent",
+		]);
 		expect(toolsIndex).toBeGreaterThan(-1);
-		expect(args[toolsIndex + 1]).toBe("ask_parent");
+		expect(args[toolsIndex + 1]).toBe("codemode,ask_parent");
 	});
 
 	it.each([
@@ -151,6 +156,7 @@ describe("subagent lineage and delegation", () => {
 		expect(args).toContain("--no-prompt-templates");
 		expect(args[toolsIndex + 1]?.split(",")).toEqual([
 			"read",
+			"codemode",
 			"ask_parent",
 			"background_agent",
 			"agent_control",
@@ -229,6 +235,52 @@ describe("RPC ask/reply and nested waiting protocol", () => {
 		expect(tracker.consume({ type: "agent_settled" })).toMatchObject({
 			waiting: false,
 			output: "Merged child findings.",
+		});
+	});
+
+	it("tracks delegation through codemode without promoting intermediate tool output to a handoff", () => {
+		const tracker = new RpcEventTracker(DEFAULT_SUBAGENT_LIMITS.questionBytes);
+		expect(
+			tracker.consume({
+				type: "tool_execution_end",
+				toolName: "background_agent",
+				parentToolCallId: "codemode-call",
+				isError: false,
+				result: { details: { protocol: CHILD_START_PROTOCOL, id: "bbbbbbbb" } },
+			}),
+		).toEqual({ type: "nested_started", id: "bbbbbbbb" });
+		expect(
+			tracker.consume({
+				type: "tool_execution_end",
+				toolName: "read",
+				parentToolCallId: "codemode-call",
+				result: { content: [{ type: "text", text: "PRIVATE_INTERMEDIATE" }] },
+			}),
+		).toBeNull();
+		expect(
+			tracker.consume({
+				type: "tool_execution_end",
+				toolName: "codemode",
+				result: { content: [{ type: "text", text: "SCRIPT_OUTPUT" }] },
+			}),
+		).toBeNull();
+		expect(tracker.consume({ type: "agent_settled" })).toMatchObject({ waiting: true });
+		tracker.consume({
+			type: "message_end",
+			message: {
+				role: "custom",
+				customType: COMPLETION_MESSAGE_TYPE,
+				details: { protocol: COMPLETION_PROTOCOL, id: "bbbbbbbb" },
+			},
+		});
+		tracker.consume({
+			type: "message_end",
+			message: { role: "assistant", content: [{ type: "text", text: "Concise final handoff." }] },
+		});
+		expect(tracker.consume({ type: "agent_settled" })).toEqual({
+			type: "settled",
+			waiting: false,
+			output: "Concise final handoff.",
 		});
 	});
 

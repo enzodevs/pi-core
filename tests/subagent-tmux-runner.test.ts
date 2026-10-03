@@ -120,7 +120,7 @@ describe("TmuxTuiRunner", () => {
 		expect(joined).toContain("--no-skills");
 		expect(joined).toContain("--no-prompt-templates");
 		expect(joined).toContain("--session");
-		expect(joined).toContain("read,ask_parent,background_agent,agent_control");
+		expect(joined).toContain("read,codemode,ask_parent,background_agent,agent_control");
 		expect(joined).toContain(`@${path.join(handle.runtime.channelDirectory, "task.md")}`);
 		expect(joined).not.toContain("--mode\nrpc");
 
