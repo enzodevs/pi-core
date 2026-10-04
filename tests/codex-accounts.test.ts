@@ -290,7 +290,7 @@ describe("Codex limits", () => {
 });
 
 it("registers only user controls and session-state restoration, no model-facing surfaces", () => {
-	const pi = { registerCommand: vi.fn(), registerShortcut: vi.fn(), on: vi.fn() };
+	const pi = { registerCommand: vi.fn(), registerShortcut: vi.fn(), registerProvider: vi.fn(), on: vi.fn() };
 	codexAccounts(pi as unknown as ExtensionAPI);
 	expect(pi.registerCommand).toHaveBeenCalledWith("codex-accounts", expect.any(Object));
 	expect(pi.registerShortcut).toHaveBeenCalledWith("ctrl+alt+a", expect.any(Object));

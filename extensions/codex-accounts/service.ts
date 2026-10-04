@@ -52,8 +52,10 @@ export class AccountService {
 		return consumeReset(auth.auth.apiKey as string, id, signal);
 	}
 
-	/** Separate provider ID avoids touching or refreshing Pi's default auth.json credentials. */
-	provider(id: string): Provider {
+	/** Separate provider ID avoids touching or refreshing Pi's default auth.json credentials.
+	 * An unbound provider exposes the catalog for startup restoration, but cannot send requests.
+	 */
+	provider(id: string | undefined): Provider {
 		return {
 			...this.base,
 			id: PERSONAL_PROVIDER,
@@ -63,7 +65,10 @@ export class AccountService {
 				apiKey: {
 					name: "Codex account vault",
 					check: async () => ({ type: "oauth", source: "OAuth" }),
-					resolve: ({ signal }) => this.auth(id, signal),
+					resolve: ({ signal }) => {
+						if (!id) throw new Error("Selecione uma conta em /codex-accounts antes de continuar.");
+						return this.auth(id, signal);
+					},
 				},
 			},
 		};

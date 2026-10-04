@@ -47,6 +47,9 @@ export default function codexAccounts(
 	),
 	getPiAccount: () => PiAccount | undefined = readPiAccount,
 ): void {
+	// Pi resolves the saved model before session_start. Publish its catalog now,
+	// without reading credentials or choosing an account until branch state is available.
+	pi.registerProvider(service.provider(undefined));
 	let selectedId: string | undefined;
 	let selectionUnavailable = false;
 	let busy = false;
@@ -321,7 +324,6 @@ export default function codexAccounts(
 
 	// Custom entries are extension state, excluded from model context by Pi.
 	pi.on("session_start", async (event, ctx) => {
-		if (selectedId) pi.unregisterProvider(PERSONAL_PROVIDER);
 		selectedId = undefined;
 		selectionUnavailable = false;
 		const entry = ctx.sessionManager
@@ -335,7 +337,7 @@ export default function codexAccounts(
 		selectionUnavailable = data?.defaultUnavailable === true;
 		const file = ctx.sessionManager.getSessionFile();
 		const fresh = event.reason === "new" || (event.reason === "startup" && (!file || !existsSync(file)));
-		if (!entry && fresh && ctx.model?.provider === PROVIDER) {
+		if (!entry && fresh && ctx.model && [PROVIDER, PERSONAL_PROVIDER].includes(ctx.model.provider)) {
 			try {
 				const accountId = await service.store.defaultAccount();
 				if (accountId) {
@@ -353,6 +355,8 @@ export default function codexAccounts(
 			}
 		}
 		if (typeof data?.accountId !== "string" || typeof data.modelId !== "string") {
+			// No saved binding: remove the startup catalog or previous session's provider.
+			pi.unregisterProvider(PERSONAL_PROVIDER);
 			if (ctx.model?.provider === PERSONAL_PROVIDER) {
 				const normal = ctx.modelRegistry.find(PROVIDER, ctx.model.id);
 				if (normal) await pi.setModel(normal);

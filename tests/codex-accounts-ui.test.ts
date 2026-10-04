@@ -55,6 +55,9 @@ function harness() {
 	};
 	const getPiAccount = vi.fn((): PiAccount | undefined => undefined);
 	codexAccounts(pi as unknown as ExtensionAPI, service, getPiAccount);
+	expect(pi.registerProvider).toHaveBeenCalledOnce();
+	expect(store.list).not.toHaveBeenCalled();
+	pi.registerProvider.mockClear();
 	const baseModel = openaiCodexProvider().getModels()[0];
 	if (!baseModel) throw new Error("Missing model");
 	const ctx = {
