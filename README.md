@@ -66,7 +66,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 ### Requirements
 
 - Node.js 22.19.0 or newer
-- Pi 1.0.2 (the tested baseline; Pi peer dependencies use the 1.x compatibility range)
+- Pi 1.0.4 (the tested baseline; Pi peer dependencies use the 1.x compatibility range)
 - A working Pi installation
 
 ### Install from GitHub
@@ -100,9 +100,17 @@ Pi Core stores mutable state under `~/.pi/agent/pi-core/`. It never modifies dis
 
 The optional WhatsApp extension is off by default. Run `/wpp on` to activate its single model tool and connect through the unofficial Baileys WhatsApp Web client. On first use, Pi writes a private QR PNG beneath `~/.pi/agent/pi-core/whatsapp/` and opens it with `xdg-open`; scan it from WhatsApp's **Linked devices** screen. `/wpp status` reports connection and index counts, while `/wpp off` disconnects and removes the tool from the active model surface. Pairing credentials remain local with owner-only permissions.
 
-The tool is read-only and requires an explicit contact name, number fragment, or chat JID. Searches return at most 20 bounded records with opaque references. Audio transcription accepts at most five prior references, deletes downloaded media after processing, and uses a local `whisper` executable when available. `whisper-cli` is also supported when `PI_WPP_WHISPER_MODEL_PATH` names a local model; `PI_WPP_WHISPER_MODEL` selects the Python Whisper model and defaults to `base`. This machine currently needs a supported transcription CLI installed before audio transcription can run.
+The tool is read-only and requires an explicit contact name, number fragment, or chat JID. Searches return at most 20 bounded records with opaque references, message direction, and quoted-reply metadata (original reference, author, kind and bounded text when supplied). Use the returned `next_before` as `before` to paginate without losing timestamp ties. `complete` describes only the local index, not the entire WhatsApp conversation. The `image` action accepts one retained image reference and returns the selected image (8 MiB maximum); old records without media descriptors require re-synchronization. Audio transcription accepts at most five prior references, deletes downloaded media after processing, and uses a local `whisper` executable when available. `whisper-cli` is also supported when `PI_WPP_WHISPER_MODEL_PATH` names a local model; `PI_WPP_WHISPER_MODEL` selects the Python Whisper model and defaults to `base`. A supported local transcription CLI must be installed before transcription can run.
 
-WhatsApp controls linked-device history synchronization, so the local index contains only history delivered during pairing plus messages observed while connected. Baileys is unofficial and may break when WhatsApp changes its private protocol; use a pinned version and understand the account/terms risk. Pi Core never sends messages through this integration.
+The extension uses Baileys `7.0.0-rc14` inside a dedicated Node worker, loaded with the pinned `jiti` runtime. Detached dependency exceptions terminate only that worker: pending requests fail and Pi reports a disconnected WhatsApp session instead of exiting. `/wpp off` and `/wpp reset` terminate the worker after a bounded graceful stop, cancelling its remaining retry timers and credential writers before reset deletes any files. No process-wide exception handler is installed. After installing dependency or isolation changes, restart Pi completely before reconnecting (an already-loaded older client cannot be retroactively isolated).
+
+The dependency requires Node 20+; Pi Core requires Node 22.19+.  Saved contact names and phone numbers are resolved through private persisted contact/LID mappings from history synchronization, contact updates, and v7 mapping events. Alternative phone identities attached to v7 messages are searchable too. Names or numbers not supplied by WhatsApp cannot be resolved.
+
+The index retains the 1,000 newest messages **per chat JID**, with global ceilings of 50,000 records and 100 MiB. Ordering uses message timestamps, including when history arrives out of order. Busy chats no longer consume the entire 1,000-message budget. Replayed messages can enrich existing records with reply/media metadata. New messages are indexed while connected. Run `/wpp reset` to delete the local index and saved pairing credentials (without a backup) and start a fresh QR pairing. This does not delete conversations from your phone. After changing the extension, run `/reload` before using the new command.
+
+After `/reload` and `/wpp on`, the model can use `action=history` with the selected contact to request up to 100 messages older than the oldest retained message, via Baileys `fetchMessageHistory`. This requires an unambiguous indexed chat. Delivery is asynchronous and depends on WhatsApp/the linked phone; request submission does not prove recovery. It sends a peer history request, not a chat message. Repeat only after inspecting received history. Retention limits still apply: a chat already holding 1,000 newer messages will discard older deliveries. Reload does not reconstruct discarded quote/media metadata; a fresh pairing may be needed for previously indexed messages.
+
+WhatsApp controls linked-device history synchronization, so the local index contains only history delivered during pairing, on-demand history received, and messages observed while connected. Baileys is unofficial and may break when WhatsApp changes its private protocol; use a pinned version and understand the account/terms risk. Pi Core never sends chat messages through this integration.
 
 ## Context inspector
 
@@ -432,7 +440,7 @@ Pi-core compatibility boundaries:
 
 ## Development
 
-Development uses Node.js 24 LTS pinned in `.node-version`; both development and published extensions require Node.js 22.19.0 or newer, matching Pi 1.0.2. All four Pi development packages are pinned to the same version.
+Development uses Node.js 24 LTS pinned in `.node-version`; both development and published extensions require Node.js 22.19.0 or newer, matching Pi 1.0.4. All four Pi development packages are pinned to the same version.
 
 ```bash
 make install

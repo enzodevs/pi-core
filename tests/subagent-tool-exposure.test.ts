@@ -154,6 +154,21 @@ describe("default child codemode (real upstream sandbox, no provider requests)",
 		expect(JSON.parse(await readFile(join(directory, "items.json"), "utf8"))).toHaveLength(2);
 	});
 
+	it("receives image blocks from read without exposing base64 as text", async () => {
+		const png =
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWP4z8AAAAMBAQCc479ZAAAAAElFTkSuQmCC";
+		await writeFile(join(directory, "pixel.png"), Buffer.from(png, "base64"));
+		const { result, text } = await script(`
+			const block = await tools.read({ path: "pixel.png" });
+			return { type: block.type, mimeType: block.mimeType, hasData: block.data.length > 0 };
+		`);
+		expect(result.isError, text).not.toBe(true);
+		expect(text).toContain('"type":"image"');
+		expect(text).toContain('"mimeType":"image/png"');
+		expect(text).toContain('"hasData":true');
+		expect(text).not.toContain(png);
+	});
+
 	it("batches reads, filters output locally, and preserves the RPC event stream", async () => {
 		const events: AgentSessionEvent[] = [];
 		const unsubscribe = currentSession().subscribe((event) => events.push(event));
