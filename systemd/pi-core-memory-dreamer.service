@@ -6,8 +6,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=%h/SoftEng/pi-core
-Environment=PATH=%h/.local/bin:%h/.local/share/fnm/aliases/default/bin:/usr/local/bin:/usr/bin
-ExecStart=/usr/bin/flock -n %h/.pi/agent/pi-core/memory-consolidator.lock %h/.local/share/fnm/aliases/default/bin/node --experimental-strip-types %h/SoftEng/pi-core/extensions/memory/run-consolidator.ts
+Environment=PATH=%h/.pi/agent/bin:%h/bin:%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin
+ExecStart=/usr/bin/flock -n %h/.pi/agent/pi-core/memory-consolidator.lock %h/.local/bin/mise exec -- node --experimental-strip-types %h/SoftEng/pi-core/extensions/memory/run-consolidator.ts
 TimeoutStartSec=16min
 Nice=10
 IOSchedulingClass=idle

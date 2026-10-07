@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install format format-check typecheck test fallow health check pack compat-latest compat-package clean headroom-install headroom-test review-skill-check
+.PHONY: help install format format-check typecheck test fallow health check pack compat-latest compat-package clean headroom-install headroom-test translate-install translate-test review-skill-check
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -31,6 +31,12 @@ headroom-install: ## Install the optional pinned JSON-only Headroom runtime (req
 
 headroom-test: ## Run the optional real Headroom regression suite
 	npm run headroom:test
+
+translate-install: ## Download and verify the optional local TranslateGemma model
+	npm run translate:install
+
+translate-test: ## Exercise local translation and report latency (requires llama-server)
+	npm run translate:test
 
 review-skill-check: ## Verify the generated evidence-first review skill
 	npm run review:skill:check

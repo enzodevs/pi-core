@@ -44,6 +44,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 
 ## Highlights
 
+- **Session-only local prompt translation** — opt-in PT-BR→English translation with `/translate on`, no extra agent context, and exact protection of common technical literals.
 - **Model-invisible context inspector** — `/context` shows usage, prompt inputs, files, skills, tools, messages, and the last provider payload without creating a chat message or model-facing tool.
 - **Exact-CWD skill profiles** — sessions in the same directory share one visibility policy.
 - **Searchable skill catalog** — hide metadata from the prompt while retaining on-demand discovery.
@@ -119,6 +120,12 @@ Run `/context` to open the dashboard, then use Tab and Shift+Tab to move through
 The summary leads with an estimated next-request budget, split across the system prompt, messages, and active tool definitions. Before the first provider response, the footer shows this as `ctx ~N%` instead of the misleading measured `0%`; after a response it switches to Pi's provider-derived reading.
 
 `payload` is the last serialized provider request observed by Pi Core and is the closest view to the exact wire body. The inspector is loaded last among Pi Core extensions, so it observes their earlier rewrites. A separately loaded extension ordered after it can still rewrite the payload; HTTP headers are not captured; and Pi may estimate current token usage between provider responses.
+
+## Local prompt translation (opt-in)
+
+`/translate on` locally translates PT-BR prompts to English before they enter the conversation; `/translate off` disables it and unloads the model. It starts off in new sessions and forks, while reload/resume preserves the same session's setting. Commands, status, translator instructions, and toggle metadata never enter agent context.
+
+Run `make translate-install` to download the verified TranslateGemma 4B Q6 model (3.2 GB), then `make translate-test` to measure local latency and inspect sample translations. Requires a recent `llama-server` on PATH. Inference is offline, and code/common technical literals and images are preserved. Failures block submission and retain the original draft; `/translate recover` restores it locally. See [setup, preservation, and limitations](extensions/translate/README.md).
 
 ## Optional Headroom JSON pilot
 
