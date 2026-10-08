@@ -67,7 +67,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 ### Requirements
 
 - Node.js 22.19.0 or newer
-- Pi 1.0.4 (the tested baseline; Pi peer dependencies use the 1.x compatibility range)
+- Pi 1.1.0 (the tested baseline; Pi peer dependencies use the 1.x compatibility range)
 - A working Pi installation
 
 ### Install from GitHub
@@ -447,7 +447,7 @@ Pi-core compatibility boundaries:
 
 ## Development
 
-Development uses Node.js 24 LTS pinned in `.node-version`; both development and published extensions require Node.js 22.19.0 or newer, matching Pi 1.0.4. All four Pi development packages are pinned to the same version.
+Development uses Node.js 24 LTS pinned in `.node-version`; both development and published extensions require Node.js 22.19.0 or newer, matching Pi 1.1.0. All four Pi development packages are pinned to the same version.
 
 ```bash
 make install

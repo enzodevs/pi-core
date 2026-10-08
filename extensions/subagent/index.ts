@@ -796,7 +796,7 @@ export default async function backgroundAgents(pi: ExtensionAPI): Promise<void> 
 		currentCtx = ctx;
 		await restoreActiveBranch(ctx, "Parent changed session branch before completion.", false);
 	});
-	pi.on("agent_settled", (_event, ctx) => {
+	pi.on("agent_settled", (event, ctx) => {
 		for (const run of runs.values()) {
 			if (run.question && !acknowledgeQuestion(run)) deliverQuestion(run, true);
 			if (run.delivery !== "pending" || acknowledgeDelivery(run)) continue;
@@ -808,7 +808,11 @@ export default async function backgroundAgents(pi: ExtensionAPI): Promise<void> 
 			const hasActiveChildren = [...runs.values()].some(
 				(run) => run.status === "running" || run.verification?.state === "checking",
 			);
-			tuiBridge.settle(childSettlement(ctx), hasActiveChildren);
+			tuiBridge.settle(
+				event.aborted ? { status: "failed", output: "Child run aborted." } : childSettlement(ctx),
+				hasActiveChildren,
+				event.aborted,
+			);
 		}
 	});
 	pi.on("session_shutdown", async (event) => {

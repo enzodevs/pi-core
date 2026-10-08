@@ -231,7 +231,10 @@ export default function idleRecap(pi: ExtensionAPI): void {
 	});
 	pi.on("input", () => clear());
 	pi.on("agent_start", () => clear());
-	pi.on("agent_settled", (_event, ctx) => schedule(ctx));
+	pi.on("agent_settled", (event, ctx) => {
+		if (event.aborted) clear();
+		else schedule(ctx);
+	});
 	pi.on("session_tree", (_event, ctx) => schedule(ctx));
 	pi.on("session_shutdown", () => {
 		unsubscribeInput?.();

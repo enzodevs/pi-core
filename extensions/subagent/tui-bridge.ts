@@ -81,13 +81,18 @@ class TmuxChildBridge {
 		return true;
 	}
 
-	settle(settlement: ChildSettlement, hasActiveChildren: boolean): void {
-		if (hasActiveChildren || this.pendingQuestionId || this.observeTerminal()) return;
+	settle(settlement: ChildSettlement, hasActiveChildren: boolean, aborted = false): void {
+		if ((!aborted && (hasActiveChildren || this.pendingQuestionId)) || this.observeTerminal()) return;
 		const output = truncateUtf8(
 			settlement.output || "No final assistant output returned.",
 			this.limits.handoffBytes,
 		);
-		this.publishTerminal({ ...settlement, output, finishedAt: Date.now() });
+		this.publishTerminal({
+			...settlement,
+			status: this.cancelled ? "stopped" : settlement.status,
+			output,
+			finishedAt: Date.now(),
+		});
 		this.currentCtx?.ui.notify(
 			"Final handoff delivered to the parent; this pane will close shortly.",
 			"info",

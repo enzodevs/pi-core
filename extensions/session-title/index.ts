@@ -151,7 +151,10 @@ export default function sessionTitle(pi: ExtensionAPI): void {
 	pi.on("session_before_tree", cancel);
 	pi.on("session_info_changed", cancel);
 	pi.on("input", cancel);
-	pi.on("agent_settled", (_event, ctx) => void generate(ctx));
+	pi.on("agent_settled", (event, ctx) => {
+		if (event.aborted) cancel();
+		else void generate(ctx);
+	});
 	pi.on("session_tree", (_event, ctx) => void generate(ctx));
 	pi.on("session_shutdown", cancel);
 }

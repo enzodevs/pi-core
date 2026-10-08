@@ -50,6 +50,10 @@ describe("recap terminal observer", () => {
 			expect(vi.getTimerCount()).toBe(1);
 			expect(observe?.()).toBeUndefined();
 			expect(vi.getTimerCount()).toBe(1);
+			handlers.get("agent_settled")?.({ aborted: true }, ctx);
+			expect(vi.getTimerCount()).toBe(0);
+			expect(observe?.()).toBeUndefined();
+			expect(vi.getTimerCount()).toBe(0);
 			handlers.get("session_shutdown")?.({}, ctx);
 			expect(unsubscribe).toHaveBeenCalledOnce();
 			expect(vi.getTimerCount()).toBe(0);

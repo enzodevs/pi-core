@@ -249,6 +249,9 @@ export class RpcEventTracker {
 		}
 
 		if (event.type === "agent_settled") {
+			if (event.aborted === true) {
+				return { type: "settled", waiting: false, error: "Child run aborted." };
+			}
 			const waiting = this.pendingQuestion !== undefined || this.nestedChildren.size > 0;
 			return {
 				type: "settled",

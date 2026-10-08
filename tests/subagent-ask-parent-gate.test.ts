@@ -8,8 +8,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import {
 	type AssistantMessage,
-	type AssistantMessageEvent,
-	EventStream,
+	createAssistantMessageEventStream,
 	type Message,
 	type Model,
 } from "@earendil-works/pi-ai";
@@ -17,19 +16,6 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { AskParentTurnGate } from "../extensions/subagent/ask-parent-gate.js";
 import { ASK_PARENT_PROTOCOL, RpcEventTracker } from "../extensions/subagent/protocol.js";
-
-class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
-	constructor() {
-		super(
-			(event) => event.type === "done" || event.type === "error",
-			(event) => {
-				if (event.type === "done") return event.message;
-				if (event.type === "error") return event.error;
-				throw new Error("Unexpected stream event.");
-			},
-		);
-	}
-}
 
 function model(): Model<"openai-responses"> {
 	return {
@@ -143,7 +129,7 @@ describe("ask_parent parallel tool gate", () => {
 				controller.signal,
 				() => {
 					llmCalls++;
-					const stream = new MockAssistantStream();
+					const stream = createAssistantMessageEventStream();
 					queueMicrotask(() => {
 						const message = assistant(calls);
 						stream.push({ type: "done", reason: "toolUse", message });

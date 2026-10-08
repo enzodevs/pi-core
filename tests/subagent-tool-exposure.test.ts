@@ -154,6 +154,14 @@ describe("default child codemode (real upstream sandbox, no provider requests)",
 		expect(JSON.parse(await readFile(join(directory, "items.json"), "utf8"))).toHaveLength(2);
 	});
 
+	it("keeps multiple script outputs distinct without enabling child model APIs", async () => {
+		const { result, text } = await script('text("OUTPUT_A"); text("OUTPUT_B"); console.log("OUTPUT_C");');
+		expect(result.isError, text).not.toBe(true);
+		expect(text).toMatch(
+			/==> text 1\/2 <==\s+OUTPUT_A[\s\S]*==> text 2\/2 <==\s+OUTPUT_B[\s\S]*<console_output>[\s\S]*OUTPUT_C/,
+		);
+	});
+
 	it("receives image blocks from read without exposing base64 as text", async () => {
 		const png =
 			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWP4z8AAAAMBAQCc479ZAAAAAElFTkSuQmCC";
@@ -185,7 +193,11 @@ describe("default child codemode (real upstream sandbox, no provider requests)",
 		const ends = events.filter((event) => event.type === "tool_execution_end");
 		expect(ends).toHaveLength(2);
 		for (const end of ends)
-			expect(end).toMatchObject({ toolName: "read", parentToolCallId: expect.any(String) });
+			expect(end).toMatchObject({
+				toolName: "read",
+				parentToolCallId: expect.any(String),
+				durationMs: expect.any(Number),
+			});
 		const tracker = new RpcEventTracker(DEFAULT_SUBAGENT_LIMITS.questionBytes);
 		for (const event of events) expect(tracker.consume(event)).toBeNull();
 		expect(tracker.consume({ type: "agent_settled" })).toEqual({

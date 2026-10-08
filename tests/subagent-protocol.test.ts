@@ -284,6 +284,35 @@ describe("RPC ask/reply and nested waiting protocol", () => {
 		});
 	});
 
+	it.each(["output", "question", "nested"] as const)(
+		"treats aborted settlement as failure instead of returning %s or waiting",
+		(state) => {
+			const tracker = new RpcEventTracker(128);
+			tracker.consume({
+				type: "message_end",
+				message: { role: "assistant", content: [{ type: "text", text: "Intermediate output." }] },
+			});
+			if (state === "question") {
+				tracker.consume({
+					type: "tool_execution_end",
+					toolName: "ask_parent",
+					result: { details: { protocol: ASK_PARENT_PROTOCOL, id: "aaaaaaaa", question: "Which API?" } },
+				});
+			} else if (state === "nested") {
+				tracker.consume({
+					type: "tool_execution_end",
+					toolName: "background_agent",
+					result: { details: { protocol: CHILD_START_PROTOCOL, id: "bbbbbbbb" } },
+				});
+			}
+			expect(tracker.consume({ type: "agent_settled", aborted: true })).toEqual({
+				type: "settled",
+				waiting: false,
+				error: "Child run aborted.",
+			});
+		},
+	);
+
 	it("rejects an oversized child question at the RPC boundary", () => {
 		const tracker = new RpcEventTracker(8);
 		expect(() =>

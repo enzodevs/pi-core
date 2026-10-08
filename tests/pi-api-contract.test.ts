@@ -1,10 +1,12 @@
 import type {
+	AgentSettledEvent,
 	BuildSystemPromptOptions,
 	ExtensionAPI,
 	ExtensionContext,
 	ExtensionFactory,
 	ExtensionToolContext,
 	ToolDefinition,
+	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expectTypeOf, it } from "vitest";
 import askUserQuestion from "../extensions/ask-user-question/index.js";
@@ -25,6 +27,8 @@ import skillManager from "../extensions/skill-manager/index.js";
 import backgroundAgents from "../extensions/subagent/index.js";
 import sudoExtension from "../extensions/sudo/index.js";
 import interfaceDefaults from "../extensions/ui/index.js";
+
+type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
 
 const factories = [
 	askUserQuestion,
@@ -58,5 +62,9 @@ describe("Pi public API contract", () => {
 		expectTypeOf<ToolDefinition>().toHaveProperty("exposure");
 		expectTypeOf<ToolDefinition>().toHaveProperty("outputSchema");
 		expectTypeOf<ExtensionToolContext>().toHaveProperty("executeTool");
+		expectTypeOf<AgentSettledEvent["aborted"]>().toEqualTypeOf<boolean>();
+		expectTypeOf<ToolExecutionEndEvent>().toHaveProperty("durationMs");
+		expectTypeOf<ToolRenderContext>().toHaveProperty("durationMs");
+		expectTypeOf<ToolRenderContext>().toHaveProperty("outputPad");
 	});
 });

@@ -45,10 +45,14 @@ function setup() {
 			sent();
 		},
 	} as unknown as ExtensionAPI;
+	let aborted!: () => void;
+	const abortSeen = new Promise<void>((resolve) => {
+		aborted = resolve;
+	});
 	const ctx = {
 		sessionManager: { getBranch: () => [] },
 		ui: { notify() {} },
-		abort() {},
+		abort: aborted,
 		shutdown() {},
 	} as unknown as ExtensionContext;
 	const bridge = createTmuxChildBridge(pi, lineage, lineage.limits, {
@@ -57,7 +61,7 @@ function setup() {
 	});
 	if (!bridge) throw new Error("expected bridge");
 	bridge.start(ctx);
-	return { bridge, channel, ctx, lineage, messages, messageSent };
+	return { bridge, channel, ctx, lineage, messages, messageSent, abortSeen };
 }
 
 describe("tmux child sidecar bridge", () => {
@@ -79,6 +83,25 @@ describe("tmux child sidecar bridge", () => {
 		expect(bridge.isQuestionPending()).toBe(false);
 		expect(readQuestion(channel)).toBeUndefined();
 		expect(listPendingCommands(channel)).toEqual([]);
+	});
+
+	it("delivers aborted settlement even while waiting for a reply or nested children", () => {
+		const { bridge, channel } = setup();
+		bridge.publishParentQuestion("question1", "Which API?");
+		bridge.settle({ status: "complete", output: "Intermediate output." }, true);
+		expect(readResult(channel)).toBeUndefined();
+		bridge.settle({ status: "failed", output: "Child run aborted." }, true, true);
+		expect(readResult(channel)).toMatchObject({ status: "failed", output: "Child run aborted." });
+		bridge.shutdown("quit");
+	});
+
+	it("keeps parent-requested cancellation stopped when the aborted event arrives first", async () => {
+		const { bridge, channel, abortSeen } = setup();
+		writeCommand(channel, { type: "cancel" });
+		await abortSeen;
+		bridge.settle({ status: "failed", output: "Child run aborted." }, false, true);
+		expect(readResult(channel)).toMatchObject({ status: "stopped" });
+		bridge.shutdown("quit");
 	});
 
 	it("accepts only the first terminal sidecar result", () => {
