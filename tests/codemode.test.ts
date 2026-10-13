@@ -104,10 +104,13 @@ beforeEach(async () => {
 	await session.bindExtensions({});
 	// Exercise the opt-in nested-guide boundary without making a provider request.
 	session.extensionRunner.setFlagValue("nested-agents", true);
-	await session.extensionRunner.emitBeforeAgentStart("test", undefined, {
-		cwd: directory,
-		contextFiles: [{ path: join(directory, "AGENTS.md"), content: "STARTUP" }],
-	});
+	await session.extensionRunner.emitBeforeAgentStart(
+		{ messageType: "user", prompt: "test" },
+		{
+			cwd: directory,
+			contextFiles: [{ path: join(directory, "AGENTS.md"), content: "STARTUP" }],
+		},
+	);
 });
 
 afterEach(async () => {

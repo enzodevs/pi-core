@@ -1,5 +1,11 @@
 import { Buffer } from "node:buffer";
-import { describe, expect, it } from "vitest";
+import type {
+	BeforeAgentStartEvent,
+	BeforeAgentStartEventResult,
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	formatMemoryContext,
 	MAX_MEMORY_CONTEXT_BYTES,
@@ -7,6 +13,47 @@ import {
 	mergeMemoryHits,
 	parseMemoryHits,
 } from "../extensions/memory/context.ts";
+import memoryContext from "../extensions/memory/index.ts";
+
+afterEach(() => vi.unstubAllEnvs());
+
+describe("memory start events", () => {
+	it.each(["user", undefined] as const)(
+		"reserves the opening lookup for a user prompt (%s)",
+		async (messageType) => {
+			vi.stubEnv("PI_CORE_MEMORY_CONSOLIDATOR", "0");
+			let start!: (
+				event: BeforeAgentStartEvent,
+				ctx: ExtensionContext,
+			) => Promise<BeforeAgentStartEventResult | undefined>;
+			const exec = vi.fn().mockResolvedValue({ code: 0, stdout: "[]", stderr: "", killed: false });
+			memoryContext({
+				on: (name: string, handler: typeof start) => {
+					if (name === "before_agent_start") start = handler;
+				},
+				registerCommand: vi.fn(),
+				exec,
+			} as unknown as ExtensionAPI);
+			const ctx = { cwd: "/fixture" } as ExtensionContext;
+			const custom = {
+				messageType: "custom",
+				message: { customType: "completion", content: "Finished", display: false },
+			} as BeforeAgentStartEvent;
+			const user = (prompt: string) => ({ messageType, prompt }) as BeforeAgentStartEvent;
+			// No prompt exists on custom starts; they must neither throw nor consume the lookup.
+			expect(await start(custom, ctx)).toBeUndefined();
+			expect(await start(user("  "), ctx)).toBeUndefined();
+			expect(exec).not.toHaveBeenCalled();
+			await start(user("Opening question"), ctx);
+			expect(exec).toHaveBeenCalledTimes(2);
+			for (const [, args] of exec.mock.calls)
+				expect(args).toEqual(expect.arrayContaining(["search", "Opening question"]));
+			await start(custom, ctx);
+			await start(user("Later question"), ctx);
+			expect(exec).toHaveBeenCalledTimes(2);
+		},
+	);
+});
 
 describe("memory context", () => {
 	it("accepts current arrays and forward-compatible result envelopes", () => {

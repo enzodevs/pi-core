@@ -50,6 +50,8 @@ export default function memoryContext(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
+		// Pi <1.2 only emitted user starts, without messageType. Keep those working.
+		if (event.messageType === "custom") return;
 		if (isConsolidator || openingLookupAttempted || !event.prompt.trim()) return;
 		openingLookupAttempted = true;
 

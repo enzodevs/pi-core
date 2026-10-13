@@ -29,7 +29,7 @@ vi.mock("../extensions/skill-manager/paths.js", () => ({
 
 // Exercises the actual Pi agent/tool/provider boundary with a deterministic local stream.
 // No credentials from the user's profile, external requests, model spend or child agents.
-describe("nested guides through Pi 0.99.1 runtime", () => {
+describe("nested guides through the pinned Pi runtime", () => {
 	it("passes positive, disabled, no-context and nested-start controls without guide reads", async () => {
 		const fixture = await mkdtemp(join(tmpdir(), "nested-runtime-"));
 		const root = join(fixture, "repo");
@@ -54,6 +54,7 @@ describe("nested guides through Pi 0.99.1 runtime", () => {
 				"no-context",
 				"nested-start",
 				"managed-enabled",
+				"managed-custom",
 				"managed-disabled",
 				"managed-empty",
 			] as const) {
@@ -151,9 +152,16 @@ describe("nested guides through Pi 0.99.1 runtime", () => {
 						stream.end(message);
 						return stream;
 					};
-					await session.prompt(
-						"Read only the source file once if tools are available. Do not read guides, search or guess markers.",
-					);
+					if (control === "managed-custom") {
+						await session.sendCustomMessage(
+							{ customType: "local-completion", content: "Read src/code.ts once.", display: false },
+							{ triggerTurn: true, deliverAs: "followUp" },
+						);
+					} else {
+						await session.prompt(
+							"Read only the source file once if tools are available. Do not read guides, search or guess markers.",
+						);
+					}
 					const first = JSON.stringify(requests[0]);
 					const last = JSON.stringify(requests.at(-1));
 					if (managed) {
@@ -173,7 +181,16 @@ describe("nested guides through Pi 0.99.1 runtime", () => {
 						expect(first).not.toContain(marker);
 						expect(calls).toEqual(["read"]);
 						expect(last).toContain("export const originalSource = 42;");
-						if (control === "enabled" || control === "managed-enabled" || control === "managed-empty") {
+						if (
+							control === "enabled" ||
+							control === "managed-enabled" ||
+							control === "managed-empty" ||
+							control === "managed-custom"
+						) {
+							if (control === "managed-custom") {
+								// Tool continuations must retain the structured skill/project sections.
+								expect(requests.at(-1)?.messages[0]).toEqual(requests[0]?.messages[0]);
+							}
 							expect(last).toContain(marker);
 							expect(last.match(new RegExp(marker, "g"))).toHaveLength(1);
 							const projectedRead = requests
