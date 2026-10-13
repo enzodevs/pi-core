@@ -18,7 +18,7 @@ The local policy adapts those recommendations rather than granting unlimited aut
 
 Do not paste all of this guide into every request or add a second global autonomy policy. Explicit task instructions may narrow normal autonomy.
 
-A custom `SYSTEM.md` retains tool schemas, project context, skill injection, and extension event wiring. It bypasses Pi's default prompt body, including generated tool-snippet/guideline prose; essential tool-use guidance therefore lives in the custom prompt. Project-local or CLI system-prompt overrides can supersede the global file. After Pi upgrades, compare the installed default prompt for useful changes instead of blindly copying it. The maintenance reminder in `SYSTEM.md` is intentionally short.
+A custom `SYSTEM.md` retains tool schemas, project context, skill injection, and extension event wiring. It bypasses Pi's default prompt body, including generated tool-snippet/guideline prose; essential tool-use guidance therefore lives in the custom prompt. Project-local or CLI system-prompt overrides can supersede the global file. After Pi upgrades, compare the installed default prompt for useful changes instead of blindly copying it. `SYSTEM.md` carries no maintenance prose, since every request would pay for it; this section is the maintenance note. Retain project/skill injection and do not duplicate this policy in `APPEND_SYSTEM.md`. The equivalent policy for other harnesses lives in `~/.agents/AGENTS.md`; `SYSTEM.md` is deliberately self-contained, so change both when the shared policy moves.
 
 ## Context without the rolling guard
 
