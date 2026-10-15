@@ -42,6 +42,7 @@
 			"./extensions/translate/index.ts",
 			"./extensions/image-clipboard/index.ts",
 			"./extensions/background-process/index.ts",
+			"./extensions/scheduler/index.ts",
 			"./extensions/memory/index.ts",
 			"./extensions/json-headroom/index.ts",
 			"./extensions/sudo/index.ts",
@@ -100,6 +101,7 @@
 	},
 	"dependencies": {
 		"@whiskeysockets/baileys": "7.0.0-rc14",
+		"croner": "10.0.1",
 		"jiti": "2.7.0",
 		"pino": "9.14.0",
 		"proper-lockfile": "4.1.2",

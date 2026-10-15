@@ -53,6 +53,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Optional JSON compaction** — a local, lossless-only Headroom pilot, disabled by default, with exact original-file recovery.
 - **Observable background subagents** — run real interactive Pi TUI children in tmux, with bounded sidecar delivery and an RPC fallback outside tmux.
 - **Bounded background processes** — watch finite CI gates or run persistent services with rotating searchable logs and direct TUI control.
+- **Deferred session scheduler** — persist one-shot, interval, and cron jobs; run shell checks without model calls and wake the agent only when needed. [Behavior and limits](extensions/scheduler/README.md).
 - **Interactive questions** — ask for bounded free text, one choice, or multiple choices without guessing.
 - **Temporary sudo** — approve each privileged command and enter a masked password that exists only in session memory.
 - **Opt-in personal WhatsApp retrieval** — pair a read-only Baileys client only when requested and expose bounded message references and local audio transcripts.
