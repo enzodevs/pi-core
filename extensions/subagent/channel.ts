@@ -158,6 +158,26 @@ export function openSidecarChannel(params: {
 	return { directory: params.directory, token: params.token, metadata: metadata as ChannelMetadata };
 }
 
+export function publishReady(channel: SidecarChannel): void {
+	writeJsonAtomic(path.join(channel.directory, "ready.json"), {
+		version: CHANNEL_VERSION,
+		token: channel.token,
+		updatedAt: Date.now(),
+	});
+}
+
+export function isReady(channel: SidecarChannel, maxAgeMs = Number.POSITIVE_INFINITY): boolean {
+	const value = readJson(path.join(channel.directory, "ready.json")) as
+		| { version?: number; token?: string; updatedAt?: number }
+		| undefined;
+	return (
+		value?.version === CHANNEL_VERSION &&
+		value.token === channel.token &&
+		typeof value.updatedAt === "number" &&
+		Date.now() - value.updatedAt <= maxAgeMs
+	);
+}
+
 export function publishQuestion(
 	channel: SidecarChannel,
 	question: Omit<ChannelQuestion, "version" | "token">,
@@ -228,6 +248,28 @@ export function writeCommand(
 		| { type: "reply"; questionId: string; text: string }
 		| { type: "cancel" },
 ): string {
+	if (command.type === "reply") {
+		// A retry reconciles the original submission, including receipts missed before reload.
+		for (const name of fs
+			.readdirSync(commandsPath(channel.directory))
+			.filter((name) => name.endsWith(".json"))) {
+			const previous = readJson(path.join(commandsPath(channel.directory), name)) as
+				| ChannelCommand
+				| undefined;
+			if (
+				previous?.version !== CHANNEL_VERSION ||
+				previous.token !== channel.token ||
+				previous.type !== "reply" ||
+				previous.questionId !== command.questionId
+			)
+				continue;
+			if (previous.text !== command.text)
+				throw new Error(
+					"A different reply is already queued for this question; reconcile the original reply first.",
+				);
+			return previous.id;
+		}
+	}
 	const order = process.hrtime.bigint().toString().padStart(20, "0");
 	const id = `${order}-${randomToken(8)}`;
 	const value = {
@@ -281,6 +323,57 @@ export function acknowledgeCommand(channel: SidecarChannel, commandId: string): 
 		token: channel.token,
 		id: commandId,
 		acknowledgedAt: Date.now(),
+	});
+}
+
+export function waitForCommand(
+	channel: SidecarChannel,
+	commandId: string,
+	timeoutMs = 15_000,
+): Promise<void> {
+	return new Promise((resolve, reject) => {
+		let watcher: fs.FSWatcher | undefined;
+		let timer: NodeJS.Timeout | undefined;
+		let reconciliation: NodeJS.Timeout | undefined;
+		const finish = (error?: Error) => {
+			watcher?.close();
+			if (timer) clearTimeout(timer);
+			if (reconciliation) clearInterval(reconciliation);
+			if (error) reject(error);
+			else resolve();
+		};
+		const scan = () => {
+			try {
+				const receipt = readJson(path.join(acknowledgementsPath(channel.directory), `${commandId}.json`)) as
+					| { version?: number; token?: string; id?: string }
+					| undefined;
+				if (
+					receipt?.version === CHANNEL_VERSION &&
+					receipt.token === channel.token &&
+					receipt.id === commandId
+				) {
+					finish();
+				} else if (readResult(channel)) finish(new Error("Child ended before accepting the command."));
+			} catch (error) {
+				finish(error instanceof Error ? error : new Error(String(error)));
+			}
+		};
+		try {
+			watcher = fs.watch(acknowledgementsPath(channel.directory), { persistent: false }, scan);
+			timer = setTimeout(
+				() =>
+					finish(
+						new Error(
+							"Child receipt unconfirmed; the command remains queued. Retry the same reply to reconcile.",
+						),
+					),
+				timeoutMs,
+			);
+			reconciliation = setInterval(scan, 250);
+			scan();
+		} catch (error) {
+			finish(error instanceof Error ? error : new Error(String(error)));
+		}
 	});
 }
 

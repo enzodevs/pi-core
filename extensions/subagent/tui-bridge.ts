@@ -7,12 +7,14 @@ import {
 	listPendingCommands,
 	openSidecarChannel,
 	publishQuestion,
+	publishReady,
 	publishResult,
 	readQuestion,
 	readResult,
 	type SidecarChannel,
 	watchSidecar,
 } from "./channel.ts";
+import { HerdrStateReporter } from "./herdr-state.ts";
 import type { SubagentLimits } from "./limits.ts";
 import { truncateUtf8 } from "./limits.ts";
 import type { ChildLineage } from "./protocol.ts";
@@ -32,8 +34,12 @@ class TmuxChildBridge {
 	private shutdownTimer: NodeJS.Timeout | undefined;
 	private processing = false;
 	private terminal = false;
+	private terminalStatus: ChannelResult["status"] | undefined;
 	private pendingQuestionId: string | undefined;
 	private cancelled = false;
+	private reconciliationTimer: NodeJS.Timeout | undefined;
+	private readonly submitted = new Set<string>();
+	private readonly reporter: HerdrStateReporter;
 
 	constructor(
 		private readonly pi: ExtensionAPI,
@@ -41,27 +47,55 @@ class TmuxChildBridge {
 		private readonly limits: SubagentLimits,
 		directory: string,
 		token: string,
+		private readonly env: NodeJS.ProcessEnv,
 	) {
+		this.reporter = new HerdrStateReporter(env);
 		this.channel = openSidecarChannel({ directory, token, lineage });
 	}
 
 	start(ctx: ExtensionContext): void {
 		this.currentCtx = ctx;
+		this.submitted.clear();
 		this.cancelTimersAndWatcher();
 		if (this.observeTerminal()) {
-			this.scheduleShutdown();
+			if (this.shouldExit()) this.scheduleShutdown();
 			return;
 		}
 		const question = readQuestion(this.channel);
 		if (question && this.hasAppliedReply(ctx, question.id)) clearQuestion(this.channel, question.id);
 		this.pendingQuestionId = question && !this.hasAppliedReply(ctx, question.id) ? question.id : undefined;
-		this.stopWatching = watchSidecar(this.channel, () => void this.processCommands());
-		void this.processCommands();
+		this.stopWatching = watchSidecar(this.channel, () => this.reconcile());
+		this.reconciliationTimer = setInterval(() => {
+			try {
+				if (!this.terminal && !this.cancelled) publishReady(this.channel);
+				this.reconcile();
+			} catch {
+				this.currentCtx?.ui.notify("Child heartbeat could not be published; retrying.", "warning");
+			}
+		}, 1_000);
+		this.reconciliationTimer.unref();
+		publishReady(this.channel);
+		this.running();
+		this.reconcile();
 	}
 
 	stopForReload(): void {
 		this.cancelTimersAndWatcher();
 		this.currentCtx = undefined;
+	}
+
+	running(): void {
+		this.reporter.state(
+			this.pendingQuestionId ? "blocked" : "working",
+			this.currentCtx?.sessionManager.getSessionFile(),
+			this.pendingQuestionId ? "Waiting for parent reply" : undefined,
+		);
+	}
+
+	reconcile(): void {
+		void this.processCommands().catch(() => {
+			this.currentCtx?.ui.notify("Parent command delivery could not be reconciled; retrying.", "warning");
+		});
 	}
 
 	isQuestionPending(): boolean {
@@ -73,6 +107,7 @@ class TmuxChildBridge {
 		const bounded = truncateUtf8(text, this.limits.questionBytes);
 		publishQuestion(this.channel, { id, text: bounded, askedAt: Date.now() });
 		this.pendingQuestionId = id;
+		this.running();
 	}
 
 	blockHumanInputWhileWaiting(ctx: ExtensionContext): boolean {
@@ -82,6 +117,7 @@ class TmuxChildBridge {
 	}
 
 	settle(settlement: ChildSettlement, hasActiveChildren: boolean, aborted = false): void {
+		if (this.currentCtx && this.pendingQuestionId) this.acknowledgeApplied(this.currentCtx);
 		if ((!aborted && (hasActiveChildren || this.pendingQuestionId)) || this.observeTerminal()) return;
 		const output = truncateUtf8(
 			settlement.output || "No final assistant output returned.",
@@ -94,10 +130,17 @@ class TmuxChildBridge {
 			finishedAt: Date.now(),
 		});
 		this.currentCtx?.ui.notify(
-			"Final handoff delivered to the parent; this pane will close shortly.",
+			settlement.status === "failed" && this.env.PI_CORE_SUBAGENT_HERDR
+				? "Child failed; handoff delivered to parent. This terminal is retained for inspection."
+				: "Final handoff delivered to the parent; this agent will exit shortly.",
 			"info",
 		);
-		this.scheduleShutdown();
+		this.reporter.state(
+			settlement.status === "complete" ? "idle" : "blocked",
+			this.currentCtx?.sessionManager.getSessionFile(),
+			settlement.status === "failed" ? "Child failed; inspect handoff in parent" : undefined,
+		);
+		if (this.shouldExit()) this.scheduleShutdown();
 	}
 
 	shutdown(reason: "quit" | "reload" | "new" | "resume" | "fork"): void {
@@ -113,12 +156,15 @@ class TmuxChildBridge {
 				finishedAt: Date.now(),
 			});
 		}
+		this.reporter.release();
 		this.currentCtx = undefined;
 	}
 
 	private observeTerminal(): boolean {
 		if (this.terminal) return true;
-		if (!readResult(this.channel)) return false;
+		const result = readResult(this.channel);
+		if (!result) return false;
+		this.terminalStatus = result.status;
 		this.terminal = true;
 		return true;
 	}
@@ -126,6 +172,7 @@ class TmuxChildBridge {
 	private publishTerminal(result: Omit<ChannelResult, "version" | "token">): void {
 		if (this.terminal) return;
 		if (publishResult(this.channel, result)) {
+			this.terminalStatus = result.status;
 			this.terminal = true;
 			return;
 		}
@@ -137,8 +184,14 @@ class TmuxChildBridge {
 	private cancelTimersAndWatcher(): void {
 		this.stopWatching?.();
 		this.stopWatching = undefined;
+		if (this.reconciliationTimer) clearInterval(this.reconciliationTimer);
+		this.reconciliationTimer = undefined;
 		if (this.shutdownTimer) clearTimeout(this.shutdownTimer);
 		this.shutdownTimer = undefined;
+	}
+
+	private shouldExit(): boolean {
+		return !this.env.PI_CORE_SUBAGENT_HERDR || this.terminalStatus !== "failed";
 	}
 
 	private scheduleShutdown(): void {
@@ -165,20 +218,44 @@ class TmuxChildBridge {
 		});
 	}
 
+	private acknowledgeApplied(ctx: ExtensionContext): Set<string> {
+		const applied = this.appliedCommandIds(ctx);
+		for (const command of listPendingCommands(this.channel)) {
+			if (!applied.has(command.id)) continue;
+			if (command.type === "reply") {
+				if (this.pendingQuestionId === command.questionId) this.pendingQuestionId = undefined;
+				clearQuestion(this.channel, command.questionId);
+				this.running();
+			}
+			acknowledgeCommand(this.channel, command.id);
+			this.submitted.delete(command.id);
+		}
+		return applied;
+	}
+
 	private async processCommands(): Promise<void> {
 		if (this.processing) return;
 		const ctx = this.currentCtx;
-		if (!ctx || readResult(this.channel)) return;
+		if (!ctx || this.cancelled || readResult(this.channel)) return;
 		this.processing = true;
 		try {
-			const applied = this.appliedCommandIds(ctx);
+			const applied = this.acknowledgeApplied(ctx);
 			for (const command of listPendingCommands(this.channel)) {
-				if (applied.has(command.id)) {
-					acknowledgeCommand(this.channel, command.id);
-					continue;
+				if (applied.has(command.id)) continue;
+				// Native queue editing can drop custom steering messages. Idle means no
+				// continuation remains: replay only unapplied commands, never duplicate a live queue.
+				if (this.submitted.has(command.id) && ctx.isIdle()) this.submitted.delete(command.id);
+				if (!this.submitted.has(command.id)) {
+					try {
+						await this.applyCommand(command, ctx);
+					} catch (error) {
+						this.submitted.delete(command.id);
+						throw error;
+					}
 				}
-				await this.applyCommand(command, ctx);
+				if (command.type === "cancel") break;
 			}
+			if (!this.cancelled) this.acknowledgeApplied(ctx);
 		} finally {
 			this.processing = false;
 		}
@@ -194,6 +271,7 @@ class TmuxChildBridge {
 		}
 		if (command.type === "reply") {
 			if (!this.pendingQuestionId || command.questionId !== this.pendingQuestionId) return;
+			this.submitted.add(command.id);
 			this.pi.sendMessage(
 				{
 					customType: CONTROL_MESSAGE_TYPE,
@@ -203,11 +281,9 @@ class TmuxChildBridge {
 				},
 				{ deliverAs: "steer", triggerTurn: true },
 			);
-			this.pendingQuestionId = undefined;
-			clearQuestion(this.channel, command.questionId);
-			acknowledgeCommand(this.channel, command.id);
 			return;
 		}
+		this.submitted.add(command.id);
 		this.pi.sendMessage(
 			{
 				customType: CONTROL_MESSAGE_TYPE,
@@ -217,7 +293,6 @@ class TmuxChildBridge {
 			},
 			{ deliverAs: "steer", triggerTurn: true },
 		);
-		acknowledgeCommand(this.channel, command.id);
 	}
 }
 
@@ -231,5 +306,5 @@ export function createTmuxChildBridge(
 	const token = env.PI_CORE_SUBAGENT_CHANNEL_TOKEN;
 	if (!directory && !token) return undefined;
 	if (!directory || !token) throw new Error("Incomplete tmux subagent channel configuration.");
-	return new TmuxChildBridge(pi, lineage, limits, directory, token);
+	return new TmuxChildBridge(pi, lineage, limits, directory, token, env);
 }

@@ -5,6 +5,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentConfig } from "../extensions/subagent/agents.js";
 import {
+	acknowledgeCommand,
 	listPendingCommands,
 	openSidecarChannel,
 	publishQuestion,
@@ -153,12 +154,16 @@ describe("TmuxTuiRunner", () => {
 		});
 		publishQuestion(channel, { id: "question1", text: "Which API?", askedAt: Date.now() });
 		expect(await questionReady).toBe("question1");
-		launched.handle.reply("question1", "Use API A");
+		const reply = launched.handle.reply("question1", "Use API A");
 		launched.handle.message("Also inspect errors");
 		expect(listPendingCommands(channel)).toMatchObject([
 			{ type: "reply", questionId: "question1", text: "Use API A" },
 			{ type: "message", text: "Also inspect errors" },
 		]);
+		const command = listPendingCommands(channel)[0];
+		if (!command) throw new Error("Missing reply command");
+		acknowledgeCommand(channel, command.id);
+		await reply;
 		publishResult(channel, { status: "complete", output: "done", finishedAt: Date.now() });
 		await expect(attached).resolves.toBe("done");
 		expect(launched.calls.some((args) => args[0] === "send-keys")).toBe(false);
@@ -220,7 +225,7 @@ describe("RunnerRouter backend selection", () => {
 		const root = temporaryRoot();
 		const rpc = new StubRpc();
 		const tmux = new StubTmux(false);
-		await expect(new RunnerRouter(rpc, tmux).run(options(root))).resolves.toBe("rpc");
+		await expect(new RunnerRouter(rpc, tmux, new StubTmux(false)).run(options(root))).resolves.toBe("rpc");
 		expect(rpc.calls).toBe(1);
 		expect(tmux.calls).toBe(0);
 	});
@@ -229,7 +234,7 @@ describe("RunnerRouter backend selection", () => {
 		const root = temporaryRoot();
 		const rpc = new StubRpc();
 		const tmux = new StubTmux(true, true);
-		await expect(new RunnerRouter(rpc, tmux).run(options(root))).resolves.toBe("rpc");
+		await expect(new RunnerRouter(rpc, tmux, new StubTmux(false)).run(options(root))).resolves.toBe("rpc");
 		expect(tmux.calls).toBe(1);
 		expect(rpc.calls).toBe(1);
 	});

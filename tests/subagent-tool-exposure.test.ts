@@ -234,10 +234,12 @@ describe("default child codemode (real upstream sandbox, no provider requests)",
 		expect(denied.result.isError).toBe(true);
 		const ask = currentSession().agent.state.tools.find((tool) => tool.name === "ask_parent");
 		if (!ask) throw new Error("Missing direct ask_parent");
+		const abort = vi.spyOn(currentSession(), "abort");
 		const question = "q".repeat(2048);
 		const result = await ask.execute("ask", { question }, new AbortController().signal);
 		expect(result.details).toMatchObject({ protocol: ASK_PARENT_PROTOCOL, question });
 		expect(result.terminate).toBe(true);
+		expect(abort).not.toHaveBeenCalled();
 	});
 
 	it("blocks codemode siblings when a direct parent question ends the turn", async () => {

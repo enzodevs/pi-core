@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createSidecarChannel,
 	listPendingCommands,
@@ -17,12 +17,15 @@ import { createChildLineage } from "../extensions/subagent/protocol.js";
 import { createTmuxChildBridge } from "../extensions/subagent/tui-bridge.js";
 
 const roots: string[] = [];
+const bridges: Array<{ stopForReload(): void }> = [];
 
 afterEach(() => {
+	for (const bridge of bridges.splice(0)) bridge.stopForReload();
+	vi.useRealTimers();
 	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function setup() {
+function setup(persist = true, herdr = false) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-core-tui-bridge-test-"));
 	roots.push(root);
 	const lineage = createChildLineage({
@@ -34,6 +37,7 @@ function setup() {
 		registryPath: path.join(root, "concurrency.json"),
 	});
 	const channel = createSidecarChannel({ runRoot: path.join(root, "runs"), lineage });
+	const entries: unknown[] = [];
 	const messages: Array<{ message: unknown; options: unknown }> = [];
 	let sent!: () => void;
 	const messageSent = new Promise<void>((resolve) => {
@@ -42,6 +46,7 @@ function setup() {
 	const pi = {
 		sendMessage(message: unknown, options: unknown) {
 			messages.push({ message, options });
+			if (persist) entries.push({ type: "custom_message", ...(message as object) });
 			sent();
 		},
 	} as unknown as ExtensionAPI;
@@ -50,18 +55,21 @@ function setup() {
 		aborted = resolve;
 	});
 	const ctx = {
-		sessionManager: { getBranch: () => [] },
+		sessionManager: { getBranch: () => entries, getSessionFile: () => "/child.jsonl" },
 		ui: { notify() {} },
+		isIdle: () => false,
 		abort: aborted,
-		shutdown() {},
+		shutdown: vi.fn(),
 	} as unknown as ExtensionContext;
 	const bridge = createTmuxChildBridge(pi, lineage, lineage.limits, {
 		PI_CORE_SUBAGENT_CHANNEL: channel.directory,
 		PI_CORE_SUBAGENT_CHANNEL_TOKEN: channel.token,
+		PI_CORE_SUBAGENT_HERDR: herdr ? "1" : undefined,
 	});
 	if (!bridge) throw new Error("expected bridge");
+	bridges.push(bridge);
 	bridge.start(ctx);
-	return { bridge, channel, ctx, lineage, messages, messageSent, abortSeen };
+	return { bridge, channel, ctx, lineage, messages, messageSent, abortSeen, entries };
 }
 
 describe("tmux child sidecar bridge", () => {
@@ -80,9 +88,34 @@ describe("tmux child sidecar bridge", () => {
 			},
 			options: { deliverAs: "steer", triggerTurn: true },
 		});
-		expect(bridge.isQuestionPending()).toBe(false);
+		await vi.waitFor(() => {
+			bridge.reconcile();
+			expect(bridge.isQuestionPending()).toBe(false);
+		});
 		expect(readQuestion(channel)).toBeUndefined();
 		expect(listPendingCommands(channel)).toEqual([]);
+	});
+
+	it("does not acknowledge a queued reply until its session receipt is persisted", async () => {
+		const { bridge, channel, messages, messageSent, entries } = setup(false);
+		bridge.publishParentQuestion("question1", "Which API?");
+		const id = writeCommand(channel, { type: "reply", questionId: "question1", text: "Use A" });
+		await messageSent;
+		expect(bridge.isQuestionPending()).toBe(true);
+		expect(listPendingCommands(channel)).toHaveLength(1);
+		bridge.settle({ status: "complete", output: "intermediate" }, false);
+		expect(readResult(channel)).toBeUndefined();
+		expect(writeCommand(channel, { type: "reply", questionId: "question1", text: "Use A" })).toBe(id);
+		expect(() => writeCommand(channel, { type: "reply", questionId: "question1", text: "Use B" })).toThrow(
+			"different reply",
+		);
+		entries.push({ type: "custom_message", ...(messages[0]?.message as object) });
+		await vi.waitFor(() => {
+			bridge.reconcile();
+			expect(listPendingCommands(channel)).toEqual([]);
+		});
+		expect(bridge.isQuestionPending()).toBe(false);
+		expect(messages).toHaveLength(1);
 	});
 
 	it("delivers aborted settlement even while waiting for a reply or nested children", () => {
@@ -102,6 +135,28 @@ describe("tmux child sidecar bridge", () => {
 		bridge.settle({ status: "failed", output: "Child run aborted." }, false, true);
 		expect(readResult(channel)).toMatchObject({ status: "stopped" });
 		bridge.shutdown("quit");
+	});
+
+	it("retains failed Herdr child TUIs across reload", async () => {
+		vi.useFakeTimers();
+		const { bridge, channel, ctx, lineage } = setup(true, true);
+		bridge.settle({ status: "failed", output: "diagnostic" }, false);
+		bridge.stopForReload();
+		const restored = createTmuxChildBridge(
+			{ sendMessage() {} } as unknown as ExtensionAPI,
+			lineage,
+			lineage.limits,
+			{
+				PI_CORE_SUBAGENT_CHANNEL: channel.directory,
+				PI_CORE_SUBAGENT_CHANNEL_TOKEN: channel.token,
+				PI_CORE_SUBAGENT_HERDR: "1",
+			},
+		);
+		if (!restored) throw new Error("Missing restored bridge");
+		bridges.push(restored);
+		restored.start(ctx);
+		await vi.advanceTimersByTimeAsync(3_000);
+		expect(ctx.shutdown).not.toHaveBeenCalled();
 	});
 
 	it("accepts only the first terminal sidecar result", () => {

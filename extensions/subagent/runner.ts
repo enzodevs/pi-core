@@ -8,15 +8,18 @@ import { CHILD_ACCOUNT_ENV, childAccountSelection } from "./account-inheritance.
 import type { AgentConfig } from "./agents.ts";
 import {
 	createSidecarChannel,
+	isReady,
 	openSidecarChannel,
 	readExit,
 	readQuestion,
 	readResult,
 	removeSidecar,
 	type SidecarChannel,
+	waitForCommand,
 	watchSidecar,
 	writeCommand,
 } from "./channel.ts";
+import { HerdrClient, type HerdrLocation } from "./herdr.ts";
 import type { SubagentLimits } from "./limits.ts";
 import { truncateUtf8 } from "./limits.ts";
 import { type ChildLineage, encodeChildLineage, type PendingQuestion, RpcEventTracker } from "./protocol.ts";
@@ -28,21 +31,23 @@ const SIDECAR_CLEANUP_DELAY_MS = 15_000;
 
 export const SUBAGENT_EXTENSION_PATH = path.join(import.meta.dirname, "index.ts");
 
-export type ChildRuntime =
-	| { backend: "rpc"; sessionFile: string }
-	| {
-			backend: "tmux-tui";
-			sessionFile: string;
-			paneId: string;
-			channelDirectory: string;
-			channelToken: string;
-	  };
+interface TuiRuntimeFields {
+	sessionFile: string;
+	paneId: string;
+	channelDirectory: string;
+	channelToken: string;
+}
+
+export type InteractiveRuntime = TuiRuntimeFields &
+	({ backend: "tmux-tui" } | { backend: "herdr-tui"; location: HerdrLocation });
+
+export type ChildRuntime = { backend: "rpc"; sessionFile: string } | InteractiveRuntime;
 
 export interface ChildHandle {
 	runtime: ChildRuntime;
 	abort(): void;
 	message(text: string): void;
-	reply(questionId: string, text: string): void;
+	reply(questionId: string, text: string): void | Promise<void>;
 	detach(): void;
 }
 
@@ -200,11 +205,27 @@ class RpcRunner {
 				let settled = false;
 				let aborted = false;
 				let forceKill: NodeJS.Timeout | undefined;
+				const replies = new Map<
+					string,
+					{
+						questionId: string;
+						text: string;
+						resolve(): void;
+						reject(error: Error): void;
+						timer: NodeJS.Timeout;
+					}
+				>();
+				const acceptedReplies = new Map<string, string>();
 
 				const finish = (error?: Error, output?: string) => {
 					if (settled) return;
 					settled = true;
 					if (forceKill) clearTimeout(forceKill);
+					for (const reply of replies.values()) {
+						clearTimeout(reply.timer);
+						reply.reject(error ?? new Error("Child ended before accepting the reply."));
+					}
+					replies.clear();
 					child.kill("SIGTERM");
 					if (error) reject(error);
 					else resolve(output || "No final assistant output returned.");
@@ -218,6 +239,24 @@ class RpcRunner {
 						return;
 					}
 					try {
+						if (
+							raw &&
+							typeof raw === "object" &&
+							"id" in raw &&
+							typeof raw.id === "string" &&
+							"type" in raw &&
+							raw.type === "response"
+						) {
+							const reply = replies.get(raw.id);
+							if (reply && "success" in raw && raw.success === true) {
+								tracker.acceptReply(reply.questionId);
+								acceptedReplies.set(reply.questionId, reply.text);
+								clearTimeout(reply.timer);
+								replies.delete(raw.id);
+								options.onStatus("running");
+								reply.resolve();
+							}
+						}
 						if (
 							raw &&
 							typeof raw === "object" &&
@@ -263,12 +302,35 @@ class RpcRunner {
 						writeRpc(child, parentPromptCommand(text));
 					},
 					reply(questionId: string, text: string) {
-						writeRpc(
-							child,
-							parentPromptCommand(`Parent reply: ${text}\n\nContinue the assigned task using this answer.`),
-						);
-						tracker.acceptReply(questionId);
-						options.onStatus("running");
+						return new Promise<void>((resolve, reject) => {
+							const id = `reply-${questionId}`;
+							if (acceptedReplies.has(questionId)) {
+								if (acceptedReplies.get(questionId) !== text)
+									return reject(new Error("A different reply was already accepted."));
+								return resolve();
+							}
+							if (replies.has(id))
+								return reject(new Error("Reply is already awaiting acceptance; no duplicate was submitted."));
+							const timer = setTimeout(() => {
+								// Keep correlation for a late response; timeout is not proof of rejection.
+								reject(
+									new Error("Child RPC reply acceptance timed out; inspect child status before retrying."),
+								);
+							}, 15_000);
+							replies.set(id, { questionId, text, resolve, reject, timer });
+							try {
+								writeRpc(child, {
+									...parentPromptCommand(
+										`Parent reply: ${text}\n\nContinue the assigned task using this answer.`,
+									),
+									id,
+								});
+							} catch (error) {
+								clearTimeout(timer);
+								replies.delete(id);
+								reject(error);
+							}
+						});
 					},
 					detach() {
 						this.abort();
@@ -307,15 +369,16 @@ class RpcRunner {
 	}
 }
 
-class TmuxTuiRunner {
+class InteractiveRunner {
 	constructor(
-		private readonly tmux: TmuxClient = createTmuxClient(),
+		private readonly tmux: TmuxClient,
 		private readonly runRoot?: string,
 		private readonly sessionDir?: string,
+		private readonly herdr?: HerdrClient,
 	) {}
 
 	available(): boolean {
-		return this.tmux.available();
+		return this.herdr ? this.herdr.available() : this.tmux.available();
 	}
 
 	async run(options: RunAgentOptions): Promise<string> {
@@ -331,8 +394,9 @@ class TmuxTuiRunner {
 		args.push(`@${files.task}`);
 		const invocation = getPiInvocation(args);
 		let paneId: string;
+		let location: HerdrLocation | undefined;
 		try {
-			paneId = this.tmux.launch({
+			const launch = {
 				cwd: options.cwd,
 				title: name,
 				channelDirectory: channel.directory,
@@ -346,8 +410,17 @@ class TmuxTuiRunner {
 				},
 				command: invocation.command,
 				args: invocation.args,
-			});
+			};
+			if (this.herdr) {
+				location = await this.herdr.launch(
+					launch,
+					options.ctx.sessionManager.getSessionFile() ?? options.cwd,
+				);
+				paneId = location.paneId;
+			} else paneId = this.tmux.launch(launch);
 		} catch (error) {
+			// Herdr may have admitted a launch even when its response was lost.
+			if (this.herdr) throw error;
 			removeSidecar(channel);
 			fs.rmSync(sessionFile, { force: true });
 			throw error instanceof TmuxLaunchError
@@ -355,7 +428,7 @@ class TmuxTuiRunner {
 				: new TmuxLaunchError("Could not launch tmux child.", { cause: error });
 		}
 		return this.supervise(options, channel, {
-			backend: "tmux-tui",
+			...(location ? { backend: "herdr-tui" as const, location } : { backend: "tmux-tui" as const }),
 			sessionFile,
 			paneId,
 			channelDirectory: channel.directory,
@@ -363,10 +436,9 @@ class TmuxTuiRunner {
 		});
 	}
 
-	async attach(
-		options: RunAgentOptions,
-		runtime: Extract<ChildRuntime, { backend: "tmux-tui" }>,
-	): Promise<string> {
+	async attach(options: RunAgentOptions, runtime: InteractiveRuntime): Promise<string> {
+		if (runtime.backend === "herdr-tui")
+			this.herdr?.remember(options.ctx.sessionManager.getSessionFile() ?? options.cwd, runtime.location);
 		const channel = openSidecarChannel({
 			directory: runtime.channelDirectory,
 			token: runtime.channelToken,
@@ -378,14 +450,16 @@ class TmuxTuiRunner {
 	private async supervise(
 		options: RunAgentOptions,
 		channel: SidecarChannel,
-		runtime: Extract<ChildRuntime, { backend: "tmux-tui" }>,
+		runtime: InteractiveRuntime,
 	): Promise<string> {
 		return new Promise<string>((resolve, reject) => {
 			let terminal = false;
 			let detached = false;
 			let lastQuestionId: string | undefined;
+			const startupDeadline = Date.now() + 30_000;
 			let forceKill: NodeJS.Timeout | undefined;
 			let livenessTimer: NodeJS.Timeout | undefined;
+			let checkingPane = false;
 			let stopWatching = () => {};
 
 			const close = () => {
@@ -397,7 +471,9 @@ class TmuxTuiRunner {
 				if (terminal || detached) return;
 				terminal = true;
 				close();
-				setTimeout(() => removeSidecar(channel), SIDECAR_CLEANUP_DELAY_MS).unref();
+				if (!error || runtime.backend !== "herdr-tui") {
+					setTimeout(() => removeSidecar(channel), SIDECAR_CLEANUP_DELAY_MS).unref();
+				}
 				if (error) reject(error);
 				else resolve(output || "No final assistant output returned.");
 			};
@@ -423,6 +499,12 @@ class TmuxTuiRunner {
 					}
 					const exit = readExit(channel);
 					if (exit) finish(new Error(`interactive child pane exited ${exit.code}`));
+					else if (runtime.backend === "herdr-tui" && Date.now() >= startupDeadline && !isReady(channel)) {
+						writeCommand(channel, { type: "cancel" });
+						finish(
+							new Error("Herdr child did not acknowledge startup within 30 seconds; cancellation queued."),
+						);
+					}
 				} catch (error) {
 					finish(error instanceof Error ? error : new Error(String(error)));
 				}
@@ -430,9 +512,29 @@ class TmuxTuiRunner {
 
 			stopWatching = watchSidecar(channel, scan);
 			livenessTimer = setInterval(() => {
-				if (terminal || detached || this.tmux.alive(runtime.paneId)) return;
+				if (terminal || detached) return;
+				// Notifications are hints: reconcile durable state even if fs.watch misses an event.
 				scan();
-				if (!terminal) finish(new Error("interactive child pane closed before completion"));
+				if (terminal || checkingPane) return;
+				checkingPane = true;
+				void (async () => {
+					try {
+						const alive =
+							runtime.backend === "herdr-tui"
+								? await this.herdr?.alive(runtime.location)
+								: this.tmux.alive(runtime.paneId);
+						if (!terminal && !detached && alive === false) {
+							scan();
+							// Herdr pane moves change public IDs. A fresh private heartbeat
+							// proves this child still lives independently of its visual location.
+							if (!terminal && (runtime.backend !== "herdr-tui" || !isReady(channel, 5_000))) {
+								finish(new Error("interactive child pane closed before completion"));
+							}
+						}
+					} finally {
+						checkingPane = false;
+					}
+				})();
 			}, 1_000);
 			livenessTimer.unref();
 			options.onSpawn({
@@ -440,12 +542,20 @@ class TmuxTuiRunner {
 				abort: () => {
 					if (terminal || detached) return;
 					writeCommand(channel, { type: "cancel" });
-					forceKill = setTimeout(() => this.tmux.kill(runtime.paneId), 2_000);
+					forceKill = setTimeout(() => {
+						if (runtime.backend === "herdr-tui") {
+							finish(new Error("Herdr cancellation unconfirmed; inspect the retained child terminal."));
+						} else {
+							this.tmux.kill(runtime.paneId);
+							finish(new Error("stopped"));
+						}
+					}, 2_000);
 					forceKill.unref();
 				},
 				message: (text) => writeCommand(channel, { type: "message", text }),
-				reply: (questionId, text) => {
-					writeCommand(channel, { type: "reply", questionId, text });
+				reply: async (questionId, text) => {
+					const id = writeCommand(channel, { type: "reply", questionId, text });
+					await waitForCommand(channel, id);
 					options.onStatus("running");
 				},
 				detach: () => {
@@ -455,7 +565,7 @@ class TmuxTuiRunner {
 					reject(new RunnerDetachedError());
 				},
 			});
-			options.onStatus("running in tmux pane");
+			options.onStatus(runtime.backend === "herdr-tui" ? "running in Herdr tab" : "running in tmux pane");
 			scan();
 		});
 	}
@@ -467,7 +577,7 @@ interface RpcBackend {
 
 interface TmuxBackend extends RpcBackend {
 	available(): boolean;
-	attach(options: RunAgentOptions, runtime: Extract<ChildRuntime, { backend: "tmux-tui" }>): Promise<string>;
+	attach(options: RunAgentOptions, runtime: InteractiveRuntime): Promise<string>;
 }
 
 export function createTmuxTuiRunner(
@@ -475,16 +585,27 @@ export function createTmuxTuiRunner(
 	runRoot?: string,
 	sessionDir?: string,
 ): TmuxBackend {
-	return new TmuxTuiRunner(tmux, runRoot, sessionDir);
+	return new InteractiveRunner(tmux, runRoot, sessionDir);
+}
+
+export function createHerdrTuiRunner(
+	herdr: HerdrClient = new HerdrClient(),
+	runRoot?: string,
+	sessionDir?: string,
+): TmuxBackend {
+	return new InteractiveRunner(createTmuxClient(), runRoot, sessionDir, herdr);
 }
 
 export class RunnerRouter {
 	constructor(
 		private readonly rpc: RpcBackend = new RpcRunner(),
 		private readonly tmux: TmuxBackend = createTmuxTuiRunner(),
+		private readonly herdr: TmuxBackend = createHerdrTuiRunner(),
 	) {}
 
 	async run(options: RunAgentOptions): Promise<string> {
+		// Never target an outer tmux session when this process belongs to Herdr.
+		if (this.herdr.available()) return this.herdr.run(options);
 		if (this.tmux.available()) {
 			try {
 				return await this.tmux.run(options);
@@ -497,10 +618,10 @@ export class RunnerRouter {
 	}
 
 	attach(options: RunAgentOptions, runtime: ChildRuntime): Promise<string> {
-		if (runtime.backend !== "tmux-tui") {
+		if (runtime.backend === "rpc") {
 			return Promise.reject(new Error("RPC children cannot be reattached after reload."));
 		}
-		return this.tmux.attach(options, runtime);
+		return (runtime.backend === "herdr-tui" ? this.herdr : this.tmux).attach(options, runtime);
 	}
 }
 

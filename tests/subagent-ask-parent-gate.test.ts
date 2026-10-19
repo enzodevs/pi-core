@@ -76,7 +76,6 @@ describe("ask_parent parallel tool gate", () => {
 				executionMode: "sequential",
 				async execute() {
 					askExecutions++;
-					controller.abort();
 					return {
 						content: [{ type: "text", text: "waiting" }],
 						details: {
@@ -141,6 +140,7 @@ describe("ask_parent parallel tool gate", () => {
 			expect(askExecutions).toBe(1);
 			expect(mutationExecutions).toBe(0);
 			expect(llmCalls).toBe(1);
+			expect(controller.signal.aborted).toBe(false);
 			const tracker = new RpcEventTracker(128);
 			const askEnd = events.find(
 				(event) => event.type === "tool_execution_end" && event.toolCallId === "ask-1",
@@ -150,12 +150,8 @@ describe("ask_parent parallel tool gate", () => {
 			const editEnd = events.find(
 				(event) => event.type === "tool_execution_end" && event.toolCallId === "edit-1",
 			);
-			if (position === "before") {
-				expect(editEnd).toMatchObject({ isError: true });
-				expect(JSON.stringify(editEnd)).toContain("ask_parent must be the only tool");
-			} else {
-				expect(editEnd).toBeUndefined();
-			}
+			expect(editEnd).toMatchObject({ isError: true, result: { terminate: true } });
+			expect(JSON.stringify(editEnd)).toContain("ask_parent must be the only tool");
 		},
 	);
 });

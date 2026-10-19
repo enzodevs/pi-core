@@ -245,7 +245,8 @@ function completionText(run: ManagedRun): string {
 function compactStatus(run: ManagedRun): string {
 	const seconds = Math.max(0, Math.round(((run.finishedAt ?? Date.now()) - run.startedAt) / 1_000));
 	const state = run.status === "running" ? run.activity : run.status;
-	const backend = run.runtime?.backend === "tmux-tui" ? " pane" : "";
+	const backend =
+		run.runtime?.backend === "herdr-tui" ? " Herdr" : run.runtime?.backend === "tmux-tui" ? " pane" : "";
 	const lifecycle = run.integration
 		? ` integrate:${run.integration.state}`
 		: run.verification
@@ -316,12 +317,19 @@ export function normalizePersistedRun(value: PersistedRun): PersistedRun | null 
 		const runtime = value.runtime as ChildRuntime;
 		if (
 			!runtime ||
-			(runtime.backend !== "rpc" && runtime.backend !== "tmux-tui") ||
+			(runtime.backend !== "rpc" && runtime.backend !== "tmux-tui" && runtime.backend !== "herdr-tui") ||
 			typeof runtime.sessionFile !== "string" ||
 			!path.isAbsolute(runtime.sessionFile) ||
-			(runtime.backend === "tmux-tui" &&
+			(runtime.backend !== "rpc" &&
 				(typeof runtime.paneId !== "string" ||
-					!/^%\d+$/.test(runtime.paneId) ||
+					(runtime.backend === "tmux-tui" && !/^%\d+$/.test(runtime.paneId)) ||
+					(runtime.backend === "herdr-tui" &&
+						(!runtime.location ||
+							typeof runtime.location.workspaceId !== "string" ||
+							typeof runtime.location.tabId !== "string" ||
+							typeof runtime.location.socketPath !== "string" ||
+							!path.isAbsolute(runtime.location.socketPath) ||
+							runtime.location.paneId !== runtime.paneId)) ||
 					typeof runtime.channelDirectory !== "string" ||
 					!path.isAbsolute(runtime.channelDirectory) ||
 					typeof runtime.channelToken !== "string"))
@@ -741,7 +749,7 @@ export default async function backgroundAgents(pi: ExtensionAPI): Promise<void> 
 				run.question.delivered = questionPresent(run, run.question.id);
 				if (!run.question.delivered) deliverQuestion(run);
 			}
-			if (run.status === "running" && treatTmuxAsAttachable && run.runtime?.backend === "tmux-tui") {
+			if (run.status === "running" && treatTmuxAsAttachable && run.runtime && run.runtime.backend !== "rpc") {
 				try {
 					const lease = await concurrency.adopt(run.id);
 					const agent =
@@ -796,6 +804,8 @@ export default async function backgroundAgents(pi: ExtensionAPI): Promise<void> 
 		currentCtx = ctx;
 		await restoreActiveBranch(ctx, "Parent changed session branch before completion.", false);
 	});
+	pi.on("agent_start", () => tuiBridge?.running());
+	pi.on("message_end", () => tuiBridge?.reconcile());
 	pi.on("agent_settled", (event, ctx) => {
 		for (const run of runs.values()) {
 			if (run.question && !acknowledgeQuestion(run)) deliverQuestion(run, true);
@@ -818,7 +828,7 @@ export default async function backgroundAgents(pi: ExtensionAPI): Promise<void> 
 	pi.on("session_shutdown", async (event) => {
 		branchGeneration++;
 		for (const run of runs.values()) {
-			if (event.reason === "reload" && run.runtime?.backend === "tmux-tui") run.child?.detach();
+			if (event.reason === "reload" && run.runtime && run.runtime.backend !== "rpc") run.child?.detach();
 			else {
 				run.cancelRequested = true;
 				run.child?.abort();
@@ -851,7 +861,7 @@ export default async function backgroundAgents(pi: ExtensionAPI): Promise<void> 
 			],
 			parameters: AskParentParams,
 			executionMode: "sequential",
-			async execute(_toolCallId, params, _signal, _update, ctx) {
+			async execute(_toolCallId, params) {
 				if ((!tuiBridge && questionOpen) || tuiBridge?.isQuestionPending()) {
 					throw new Error("A parent question is already pending.");
 				}
@@ -859,7 +869,7 @@ export default async function backgroundAgents(pi: ExtensionAPI): Promise<void> 
 				questionOpen = !tuiBridge;
 				const id = newRunId();
 				tuiBridge?.publishParentQuestion(id, question);
-				ctx.abort();
+				// terminate pauses automatic follow-up without marking the run aborted.
 				return {
 					content: [{ type: "text", text: "Question sent. End this turn and wait for the parent reply." }],
 					details: { protocol: ASK_PARENT_PROTOCOL, id, question },
@@ -1179,7 +1189,12 @@ export default async function backgroundAgents(pi: ExtensionAPI): Promise<void> 
 			const message = assertBoundedText(params.message ?? "", "message", limits.replyBytes);
 			if (params.action === "reply") {
 				if (!run.question) throw new Error(`Run ${params.id} has no pending question.`);
-				run.child.reply(run.question.id, message);
+				const questionId = run.question.id;
+				await run.child.reply(questionId, message);
+				// A new question or terminal result can arrive while acceptance is in flight.
+				if (run.question?.id !== questionId || run.status !== "running") {
+					return { content: [{ type: "text", text: `reply accepted ${params.id}` }], details: {} };
+				}
 				run.question = undefined;
 				run.activity = "running";
 				persist(run);
