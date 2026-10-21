@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Reviews exact Git changes, including large working-tree WIP, with evidence-first coverage; use worker for general plan or architecture critique
+description: Reviews exact Git changes, including large working-tree WIP, with evidence-first coverage; use code-health for structural assessments and worker for general tasks
 tools: read, bash, edit, write, grep, find, ls
 workspace: inherit
 ---
