@@ -11,7 +11,6 @@ import { describe, expect, it, vi } from "vitest";
 import { askSingleChoice } from "../extensions/ask-user-question/choices.js";
 import type { BackgroundProcessRun } from "../extensions/background-process/index.js";
 import { renderProcessView, showProcesses } from "../extensions/background-process/ui.js";
-import { AccountPanel } from "../extensions/codex-accounts/panel.js";
 import { showContextInspector } from "../extensions/context-inspector/ui.js";
 import draftToggle from "../extensions/draft-toggle/index.js";
 import { DRAFT_ENTRY_TYPE } from "../extensions/draft-toggle/state.js";
@@ -167,31 +166,6 @@ describe("human context and recovery", () => {
 		expect(panel.render(65).join("\n")).toContain("set in project");
 		panel.handleInput?.("\x1b");
 		await pending;
-	});
-	it("groups account actions and keeps full details accessible without activating anything", () => {
-		const done = vi.fn();
-		let rows = 10;
-		const panel = new AccountPanel(
-			{ accounts: [{ key: "vault:a", label: "Work", source: "vault", active: true, isDefault: false }] },
-			theme as never,
-			done,
-			() => {},
-			() => rows,
-		);
-		expect(bounded(panel, 50, rows)).toContain("Usar conta");
-		panel.handleInput("g");
-		expect(panel.render(50).join("\n")).toContain("Gerenciar");
-		panel.handleInput("v");
-		expect(bounded(panel, 50, rows)).toContain("cofre local");
-		panel.handleInput("\x1b[F");
-		bounded(panel, 50, rows);
-		expect(done).not.toHaveBeenCalled();
-		rows = 6;
-		bounded(panel, 20, rows);
-		panel.handleInput("\x1b");
-		expect(done).not.toHaveBeenCalled();
-		panel.handleInput("\x1b");
-		expect(done).toHaveBeenCalledWith(undefined);
 	});
 	it("opens full context inventory details and returns to the same selection", async () => {
 		const h = harness(10, 35);

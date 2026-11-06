@@ -74,15 +74,6 @@ node -e 'let n=0; const t=setInterval(()=>{console.log("line",++n); if(n===120)c
 3. In an inventory, select an item and Enter to open full details. Scroll to the end of long content; Escape returns to the same selection.
 4. Raw instructions/provider payload remain accessible and scrollable. Merely inspecting must not add an entry to the conversation.
 
-## 9. Accounts — only if the opt-in extension is installed
-
-1. Open `/codex-accounts` (or Ctrl+Alt+A). Do not add/login/refresh accounts just to test navigation.
-2. Tab/Shift+Tab switches the viewed account without activating it.
-3. Active **in this session** and default **for new sessions** must remain distinct.
-4. G moves between Use account / Manage / With confirmation action groups; no action is executed by browsing.
-5. V opens full origin, quotas/renewal, and consequences. Scroll and resize. Escape returns to actions; another Escape closes.
-6. Existing reset/removal confirmations remain mandatory. Do not redeem a reset or remove credentials merely to validate appearance. Quota refresh explicitly contacts the provider.
-
 ## Report a problem
 
 Send panel name, exact keys, terminal dimensions, regular/fullscreen mode, expected versus actual behavior, and a screenshot with private data redacted. Check both first use and returning after interruption; a screen fitting its bounds is not enough if information or consequences become inaccessible.

@@ -19,6 +19,7 @@ import {
 import {
 	buildChildArgs,
 	buildChildTools,
+	CHILD_EXTENSION_PATHS,
 	parentPromptCommand,
 	SUBAGENT_EXTENSION_PATH,
 } from "../extensions/subagent/runner.js";
@@ -150,7 +151,13 @@ describe("subagent lineage and delegation", () => {
 
 		expect(args.slice(0, 3)).toEqual(["--mode", "rpc", "--no-session"]);
 		expect(args[extensionIndex + 1]).toBe(path.resolve(extensionPath));
-		expect(args.filter((arg) => arg === "--extension")).toHaveLength(1);
+		expect(args.filter((arg) => arg === "--extension")).toHaveLength(4);
+		for (const extension of CHILD_EXTENSION_PATHS) {
+			expect(args[args.indexOf(extension) - 1]).toBe("--extension");
+			expect(fs.existsSync(extension)).toBe(true);
+		}
+		expect(args).toContain("--headroom-json");
+		expect(args).toContain("--nested-agents");
 		expect(args).toContain("--no-extensions");
 		expect(args).toContain("--no-skills");
 		expect(args).toContain("--no-prompt-templates");

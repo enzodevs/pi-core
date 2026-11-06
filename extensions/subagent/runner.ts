@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
-import { CHILD_ACCOUNT_ENV, childAccountSelection } from "./account-inheritance.ts";
 import type { AgentConfig } from "./agents.ts";
 import {
 	createSidecarChannel,
@@ -30,6 +29,10 @@ const HANDOFF_INSTRUCTION =
 const SIDECAR_CLEANUP_DELAY_MS = 15_000;
 
 export const SUBAGENT_EXTENSION_PATH = path.join(import.meta.dirname, "index.ts");
+/** These add no tools, so children keep their allowlist while sharing speed and context behavior. */
+export const CHILD_EXTENSION_PATHS = ["fast-mode", "json-headroom", "nested-agents"].map((name) =>
+	path.join(import.meta.dirname, "..", name, "index.ts"),
+);
 
 interface TuiRuntimeFields {
 	sessionFile: string;
@@ -163,13 +166,16 @@ export function buildChildArgs(
 		"--no-extensions",
 		"--extension",
 		path.resolve(extensionPath),
+		...CHILD_EXTENSION_PATHS.flatMap((extension) => ["--extension", extension]),
+		"--headroom-json",
+		"--nested-agents",
 		"--no-skills",
 		"--no-prompt-templates",
 		"--no-approve",
 	);
-	const selection = childAccountSelection(options.ctx, options.model ?? options.agent.model);
-	if (selection.accountId) args.push("--extension", path.join(import.meta.dirname, "account-provider.ts"));
-	if (selection.model) args.push("--model", selection.model);
+	const parentModel = options.ctx.model ? `${options.ctx.model.provider}/${options.ctx.model.id}` : undefined;
+	const model = options.model ?? options.agent.model ?? parentModel;
+	if (model) args.push("--model", model);
 	const thinking = options.thinking ?? (!options.agent.model ? options.ctx.thinkingLevel : undefined);
 	if (thinking) args.push("--thinking", thinking);
 	args.push("--tools", buildChildTools(options.agent, options.lineage).join(","));
@@ -191,8 +197,6 @@ class RpcRunner {
 					cwd: options.cwd,
 					env: {
 						...process.env,
-						[CHILD_ACCOUNT_ENV]:
-							childAccountSelection(options.ctx, options.model ?? options.agent.model).accountId ?? "",
 						PI_CORE_SUBAGENT_CONTEXT: encodeChildLineage(options.lineage),
 					},
 					shell: false,
@@ -402,8 +406,6 @@ class InteractiveRunner {
 				channelDirectory: channel.directory,
 				channelToken: channel.token,
 				environment: {
-					[CHILD_ACCOUNT_ENV]:
-						childAccountSelection(options.ctx, options.model ?? options.agent.model).accountId ?? "",
 					PI_CORE_SUBAGENT_CONTEXT: encodeChildLineage(options.lineage),
 					PI_CORE_SUBAGENT_CHANNEL: channel.directory,
 					PI_CORE_SUBAGENT_CHANNEL_TOKEN: channel.token,

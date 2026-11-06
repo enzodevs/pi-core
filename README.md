@@ -96,10 +96,6 @@ pi install "$PWD"
 
 Pi Core stores mutable state under `~/.pi/agent/pi-core/`. It never modifies discovered skill files.
 
-## Personal Codex accounts (opt-in)
-
-`/codex-accounts` provides a keyboard-driven account switcher with on-demand 5-hour/weekly usage, separate private OAuth storage, and no model-facing tools or prompt injection. It is intentionally not auto-loaded. See [setup, security, and limitations](extensions/codex-accounts/README.md).
-
 ## Personal WhatsApp retrieval
 
 The optional WhatsApp extension is off by default. Run `/wpp on` to activate its single model tool and connect through the unofficial Baileys WhatsApp Web client. On first use, Pi writes a private QR PNG beneath `~/.pi/agent/pi-core/whatsapp/` and opens it with `xdg-open`; scan it from WhatsApp's **Linked devices** screen. `/wpp status` reports connection and index counts, while `/wpp off` disconnects and removes the tool from the active model surface. Pairing credentials remain local with owner-only permissions.
@@ -220,9 +216,7 @@ background_agent(agent="code-health", cwd="/path/to/project", workspace="inherit
 
 `background_agent` returns a short run ID immediately, leaving the parent free to continue. Writing profiles can declare `workspace: worktree`; Pi Core then provisions clean linked worktrees exclusively through [Worktrunk](https://worktrunk.dev/) and launches the child there. Install `wt` separately and keep it on `PATH` (for example, `cargo install worktrunk`). Inside Herdr, Pi Core creates a background **Pi subagents** workspace and gives each child its own tab without splitting the parent terminal or changing focus. Siblings launched by the same parent instance share that workspace; descendants inherit it. Tabs and workspaces are retained for inspection and manual cleanup, so automatic cleanup cannot close a terminal you have repurposed. Herdr has priority over an outer tmux environment. An unconfirmed Herdr launch is reported rather than retried through another backend, avoiding duplicate agents. Outside Herdr, when the parent is inside a valid tmux pane, Pi Core opens a detached split containing the **actual interactive Pi TUI child**. Focus it with normal tmux navigation to observe, scroll, or interact with the child directly. Nested agents use the same backend selection, so an allowed child delegation opens another real pane. Outside tmux, or when pane launch fails before work starts, Pi Core preserves the isolated RPC backend.
 
-Every child gets a persistent Pi session named `agent:<profile>:<run-id>`. Its session header links to the direct parent session, and a non-context custom entry records validated lineage. The child starts with extension discovery disabled, the Pi Core subagent extension loaded by absolute path, skills and prompt templates disabled, and an explicit tool allowlist. Profile tools remain restrictive; Pi Core adds only `ask_parent` and, when the pinned child policy permits nesting, `background_agent` plus `agent_control`.
-
-Codex children inherit the parent's session-selected account, including when a call or profile explicitly requests an `openai-codex/...` model. The launcher maps that model to `codex-accounts/...` and loads a minimal account provider before model resolution in RPC, tmux, and Herdr. Only the account reference crosses the process boundary; OAuth tokens stay in the existing private vault. Missing or unavailable account selections fail instead of falling back to Pi's normal login. Non-Codex providers are unchanged. Changing the parent's account applies to newly launched children, not already-running processes.
+Every child gets a persistent Pi session named `agent:<profile>:<run-id>`. Its session header links to the direct parent session, and a non-context custom entry records validated lineage. The child starts with extension discovery disabled, the Pi Core subagent, Fast mode, JSON Headroom, and nested guide extensions loaded by absolute path, skills and prompt templates disabled, and an explicit tool allowlist. Profile tools remain restrictive; Pi Core adds only `ask_parent` and, when the pinned child policy permits nesting, `background_agent` plus `agent_control`.
 
 Parent/child control never uses pane keystrokes or captured terminal output. A private `0700` sidecar beneath `~/.pi/agent/pi-core/subagents/runs/` carries atomic, ownership-checked question, reply, steering, cancellation, exit, and final-result records. This means human typing, focus changes, scrolling, and TUI rendering cannot corrupt automatic delivery. Thinking, tool transcripts, and pane contents never enter the parent; only one immutable UTF-8-bounded final assistant handoff is pushed durably.
 
@@ -344,7 +338,6 @@ Pi Core uses Pi's own theme and component runtime rather than starting another t
 - **Processes (`/ps`)** show recognizable commands, directories, state and recent output. Tab cycles overview → scrollable logs → full command/directory details. End resumes live logs. `S` offers an in-panel stop confirmation; Escape keeps the process running.
 - **Skills** explain the selected mode and inheritance and acknowledge actual save success/failure. Failed writes retain the previous setting and can be retried.
 - **Context (`/context`)** uses purpose-driven labels. Enter opens full inventory details; Escape returns to the selection. Tab still cycles panels.
-- **Codex accounts** retain active/default distinctions, quota and action consequences. `G` navigates action groups; `V` opens scrollable limits, renewal, origin, and consequences without activating a different account.
 
 The former Interstellar header, theme, and custom animation have been removed. Pi's native header and theme remain in control; working text stays visible, but the animated indicator is hidden. If you previously selected `interstellar`, select an available theme in `/settings`; Pi Core does not rewrite your personal settings.
 
@@ -362,26 +355,19 @@ After the first completed user-assistant exchange, an unnamed session receives a
 
 ## OpenAI Fast mode
 
-Toggle priority processing for the OAuth-backed `openai-codex` provider without restarting the session:
+Toggle faster processing for your ChatGPT subscription login without restarting the session:
 
 ```text
-/fast          # toggle
-/fast on       # enable
-/fast off      # disable
-/fast status   # inspect
+/fast               # toggle Fast (`service_tier: "priority"`)
+/ultrafast          # toggle Ultrafast (`service_tier: "ultrafast"`)
+/fast on            # also: /ultrafast on
+/fast off           # also: /ultrafast off; both disable either mode
+/fast status        # also: /ultrafast status
 ```
 
-When enabled, subsequent Codex requests include:
+The modes are exclusive: enabling one replaces the other. They apply to the `openai` provider signed in with ChatGPT and to the legacy `openai-codex-responses` API; OpenAI API-key requests remain untouched because these tiers would bill them at premium rates.
 
-```json
-{
-  "service_tier": "priority"
-}
-```
-
-The official OpenAI Codex implementation uses the same request value for Fast mode. Pi Core applies it only to the `openai-codex-responses` API, including personal `codex-accounts`; other APIs remain untouched. Priority processing may incur premium pricing.
-
-Pi 0.99 labels OpenAI Codex as legacy and offers ChatGPT login through the `openai` provider. Pi Core does not migrate credentials or enable Fast mode on that new provider automatically. Personal accounts still delegate authentication and model discovery to the upstream legacy Codex provider, so new catalog models such as GPT-6.1 Sol do not require a Pi Core model list update.
+Ultrafast needs a plan that includes it. It is sent only for `gpt-6.1-sol` and `gpt-6-astra`, the models the live OpenAI catalog lists for it; other models use Fast, and the footer shows the tier in effect. Both modes consume plan usage faster, Ultrafast by far the most. The setting is shared by Pi sessions, including subagents, which read it when they start; an already-running process keeps the mode it loaded. The `service_tier` reported in responses can read `default` even when the requested tier is honored, so judge by speed rather than that field.
 
 State persists at:
 
@@ -486,7 +472,7 @@ Compatibility checks cover two additional boundaries:
 - `make compat-package` packs pi-core, installs the tarball into an isolated temporary project with the locked Pi version, and loads every packaged extension.
 - `make compat-latest` copies the repository to an isolated temporary directory, installs the latest published Pi packages, and runs type checking, tests, a package dry run, and `compat:package`. The final check installs the tarball and loads its extensions, catching incompatible peer dependency ranges as well as loader failures. It is intentionally opt-in because it requires network access and may expose an upstream breaking change before pi-core updates its lockfile.
 
-Subagents intentionally launch with `--no-extensions` and an explicit tool allowlist. The explicitly loaded subagent extension registers upstream codemode locally and the harness includes it automatically; no additional extension or parent flag is needed. Other built-in extensions (MCP, tool search, and llama.cpp) remain disabled. Codemode inherits the child's callable tool permissions, not the parent's tool catalog. Migration to the new OpenAI ChatGPT provider is not enabled by this compatibility update.
+Subagents intentionally launch with `--no-extensions` and an explicit tool allowlist. The explicitly loaded subagent extension registers upstream codemode locally and the harness includes it automatically; the Fast mode, JSON Headroom, and nested guide extensions are also loaded, adding no tools. Children start with `--headroom-json` and `--nested-agents`; Headroom leaves output unchanged when its runtime is unavailable or the output is ineligible. Because children use `--no-approve`, nested guides apply only under a directory with a saved `/trust` decision; other project resources stay off. Other built-in extensions (MCP, tool search, and llama.cpp) remain disabled. Codemode inherits the child's callable tool permissions, not the parent's tool catalog. Migration to the new OpenAI ChatGPT provider is not enabled by this compatibility update.
 
 Set `PI_CORE_KEEP_COMPAT_TEMP=1` to preserve a compatibility command's temporary workspace for diagnosis.
 
