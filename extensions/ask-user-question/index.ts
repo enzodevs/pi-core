@@ -40,18 +40,25 @@ export default function askUserQuestion(pi: ExtensionAPI): void {
 				return unavailableResult(prepared, "Choice questions require Pi's interactive TUI");
 			return withSharedUiLock(async () => {
 				if (signal?.aborted) return cancelledResult(prepared);
-				if (prepared.mode === "text") {
-					const title = prepared.context ? `${prepared.question}\n\n${prepared.context}` : prepared.question;
-					const answer = await ctx.ui.editor(title);
-					if (answer === undefined) return cancelledResult(prepared);
-					return answeredResult(prepared, [{ type: "text", label: answer.trim(), value: answer.trim() }]);
+				pi.events.emit("herdr:blocked", { active: true, label: prepared.question });
+				try {
+					if (prepared.mode === "text") {
+						const title = prepared.context
+							? `${prepared.question}\n\n${prepared.context}`
+							: prepared.question;
+						const answer = await ctx.ui.editor(title);
+						if (answer === undefined) return cancelledResult(prepared);
+						return answeredResult(prepared, [{ type: "text", label: answer.trim(), value: answer.trim() }]);
+					}
+					if (prepared.mode === "single-select") {
+						const answer = await askSingleChoice(ctx, prepared.question, prepared.context, prepared.options);
+						return answer ? answeredResult(prepared, [answer]) : cancelledResult(prepared);
+					}
+					const answers = await askMultiChoice(ctx, prepared.question, prepared.context, prepared.options);
+					return answers ? answeredResult(prepared, answers) : cancelledResult(prepared);
+				} finally {
+					pi.events.emit("herdr:blocked", { active: false });
 				}
-				if (prepared.mode === "single-select") {
-					const answer = await askSingleChoice(ctx, prepared.question, prepared.context, prepared.options);
-					return answer ? answeredResult(prepared, [answer]) : cancelledResult(prepared);
-				}
-				const answers = await askMultiChoice(ctx, prepared.question, prepared.context, prepared.options);
-				return answers ? answeredResult(prepared, answers) : cancelledResult(prepared);
 			});
 		},
 		renderCall(args, theme) {

@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { Check } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	type AskUserQuestionInput,
 	AskUserQuestionParams,
@@ -16,9 +16,10 @@ import askUserQuestion from "../extensions/ask-user-question/index.js";
 
 type AskTool = ToolDefinition<typeof AskUserQuestionParams, AskUserQuestionResultDetails>;
 
-function registeredTool(): AskTool {
+function registeredTool(emit = vi.fn()): AskTool {
 	let registered: AskTool | undefined;
 	askUserQuestion({
+		events: { emit },
 		registerTool(tool: ToolDefinition) {
 			registered = tool as AskTool;
 		},
@@ -126,14 +127,68 @@ describe("ask_user_question core", () => {
 });
 
 describe("ask_user_question extension", () => {
+	describe.each([
+		{ name: "TUI text", mode: "tui", input: { question: "Why?" } },
+		{ name: "RPC text", mode: "rpc", input: { question: "Why?" } },
+		{ name: "single-select", mode: "tui", input: { question: "Pick", options: [{ label: "A" }] } },
+		{
+			name: "multi-select",
+			mode: "tui",
+			input: { question: "Pick", options: [{ label: "A" }], multiSelect: true },
+		},
+	] satisfies { name: string; mode: "tui" | "rpc"; input: AskUserQuestionInput }[])(
+		"herdr waiting state: $name",
+		({ mode, input }) => {
+			it.each(["answered", "cancelled", "error"] as const)("balances events when %s", async (outcome) => {
+				const emit = vi.fn();
+				let close = () => {};
+				const closed = new Promise<void>((resolve) => {
+					close = resolve;
+				});
+				const failure = new Error("UI failed");
+				const waitForUser = async () => {
+					expect(emit.mock.calls).toEqual([["herdr:blocked", { active: true, label: input.question }]]);
+					await closed;
+					if (outcome === "error") throw failure;
+				};
+				const result = execute(
+					registeredTool(emit),
+					input,
+					context({
+						mode,
+						editor: async () => {
+							await waitForUser();
+							return outcome === "cancelled" ? undefined : "Because";
+						},
+						custom: async () => {
+							await waitForUser();
+							return outcome === "cancelled" ? null : [{ type: "option", label: "A", value: "A", index: 1 }];
+						},
+					}),
+				);
+				await new Promise((resolve) => setImmediate(resolve));
+				expect(emit.mock.calls).toEqual([["herdr:blocked", { active: true, label: input.question }]]);
+				close();
+				if (outcome === "error") await expect(result).rejects.toBe(failure);
+				else await expect(result).resolves.toMatchObject({ details: { status: outcome } });
+				expect(emit.mock.calls).toEqual([
+					["herdr:blocked", { active: true, label: input.question }],
+					["herdr:blocked", { active: false }],
+				]);
+			});
+		},
+	);
+
 	it("returns a definitive unavailable result without UI", async () => {
+		const emit = vi.fn();
 		const result = await execute(
-			registeredTool(),
+			registeredTool(emit),
 			{ question: "Pick", options: [{ label: "A" }] },
 			context({ mode: "json", hasUI: false }),
 		);
 		expect(result.content[0]).toEqual({ type: "text", text: "ask_user_question requires an interactive UI" });
 		expect(result.details).toMatchObject({ status: "unavailable", mode: "single-select", answers: [] });
+		expect(emit).not.toHaveBeenCalled();
 	});
 
 	it("supports free text over RPC but rejects TUI-only choice dialogs", async () => {
@@ -205,8 +260,9 @@ describe("ask_user_question extension", () => {
 		const controller = new AbortController();
 		controller.abort();
 		let opened = false;
+		const emit = vi.fn();
 		const result = await execute(
-			registeredTool(),
+			registeredTool(emit),
 			{ question: "Why?" },
 			context({
 				editor: async () => {
@@ -217,11 +273,13 @@ describe("ask_user_question extension", () => {
 			controller.signal,
 		);
 		expect(opened).toBe(false);
+		expect(emit).not.toHaveBeenCalled();
 		expect(result.details).toMatchObject({ status: "cancelled", answers: [] });
 	});
 
 	it("serializes concurrent popup calls through the shared UI lock", async () => {
-		const tool = registeredTool();
+		const emit = vi.fn();
+		const tool = registeredTool(emit);
 		const opened: string[] = [];
 		const releases: Array<(answer: string) => void> = [];
 		const ctx = context({
@@ -235,6 +293,7 @@ describe("ask_user_question extension", () => {
 		const second = execute(tool, { question: "Second?" }, ctx);
 		await new Promise((resolve) => setImmediate(resolve));
 		expect(opened).toEqual(["First?"]);
+		expect(emit.mock.calls).toEqual([["herdr:blocked", { active: true, label: "First?" }]]);
 
 		releases[0]("one");
 		await first;
@@ -242,5 +301,11 @@ describe("ask_user_question extension", () => {
 		expect(opened).toEqual(["First?", "Second?"]);
 		releases[1]("two");
 		await expect(second).resolves.toMatchObject({ details: { status: "answered" } });
+		expect(emit.mock.calls).toEqual([
+			["herdr:blocked", { active: true, label: "First?" }],
+			["herdr:blocked", { active: false }],
+			["herdr:blocked", { active: true, label: "Second?" }],
+			["herdr:blocked", { active: false }],
+		]);
 	});
 });
