@@ -1,7 +1,6 @@
-interface CatalogProfile {
-	name: string;
-	description: string;
-}
+import type { AgentConfig } from "./agents.ts";
+
+type CatalogProfile = Pick<AgentConfig, "name" | "description" | "source" | "workspace" | "workspaceSource">;
 
 interface CatalogModel {
 	provider: string;
@@ -27,7 +26,13 @@ export function buildAgentCatalog(
 	const agents = profiles
 		.filter((profile) => profile.name.length <= 256)
 		.slice(0, 12)
-		.map((profile) => ({ name: profile.name, description: profile.description.slice(0, 160) }));
+		.map((profile) => ({
+			name: profile.name,
+			description: profile.description.slice(0, 160),
+			source: profile.source,
+			workspace: profile.workspace ?? "inherit",
+			workspaceSource: profile.workspaceSource ?? (profile.workspace ? profile.source : "default"),
+		}));
 	const availableModels = matches
 		.filter((model) => `${model.provider}/${model.id}`.length <= 256)
 		.slice(0, 12)

@@ -2,17 +2,31 @@ import { describe, expect, it } from "vitest";
 import { buildAgentCatalog } from "../extensions/subagent/catalog.ts";
 
 const profiles = [
-	{ name: "worker", description: "Implementation" },
-	{ name: "reviewer", description: "Read-only review" },
-];
+	{ name: "worker", description: "Implementation", source: "bundled" as const },
+	{ name: "reviewer", description: "Read-only review", source: "user" as const },
+] as const;
 const models = [{ provider: "example", id: "gpt-6-astra", name: "GPT 6 Astra" }];
 
 describe("agent catalog", () => {
 	it("searches display names and IDs without changing launch identifiers", () => {
 		const result = buildAgentCatalog(profiles, models, "GPT 6 ASTRA");
-		expect(result.agents).toEqual(profiles);
+		expect(result.agents).toEqual(
+			profiles.map((profile) => ({ ...profile, workspace: "inherit", workspaceSource: "default" })),
+		);
 		expect(result.models).toEqual([{ model: "example/gpt-6-astra", name: "GPT 6 Astra" }]);
 		expect(buildAgentCatalog(profiles, models, "example/gpt-6").models).toEqual(result.models);
+	});
+
+	it("exposes the winning profile and inherited workspace policy separately", () => {
+		const result = buildAgentCatalog(
+			[{ ...profiles[0], source: "user", workspace: "worktree", workspaceSource: "bundled" }],
+			[],
+		);
+		expect(result.agents[0]).toMatchObject({
+			source: "user",
+			workspace: "worktree",
+			workspaceSource: "bundled",
+		});
 	});
 
 	it("reports no matches definitively", () => {
@@ -30,7 +44,7 @@ describe("agent catalog", () => {
 		expect(result.models).toHaveLength(12);
 		expect(result).toMatchObject({ agentsOmitted: 8, modelsMatched: 20, modelsOmitted: 8 });
 		const oversized = buildAgentCatalog(
-			[{ name: "x".repeat(257), description: "" }],
+			[{ name: "x".repeat(257), description: "", source: "bundled" }],
 			[{ provider: "example", id: "x".repeat(257), name: "" }],
 		);
 		expect(oversized).toMatchObject({ agents: [], agentsOmitted: 1, models: [], modelsOmitted: 1 });

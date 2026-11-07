@@ -10,7 +10,8 @@ The local policy adapts those recommendations rather than granting unlimited aut
 
 ## Where instructions belong
 
-- `~/.pi/agent/SYSTEM.md`: the lean personal base prompt for intent, initiative, research, tool use, and verification. It replaces Pi's default prompt rather than overriding it afterward. The previous `APPEND_SYSTEM.md` was backed up beneath `~/.pi/agent/pi-core/backups/` and removed to prevent duplication; installed Pi files are not patched.
+- `~/.agents/AGENTS.md` (also supplied to Pi through `~/.pi/agent/AGENTS.md`): shared authority, initiative, safety, research and verification policy. Keep each universal rule here once.
+- `~/.pi/agent/SYSTEM.md`: Pi-specific tool mechanics, installed API documentation, codemode and delegation guidance. It replaces Pi's default prompt; do not repeat the shared agreement here. These are personal configuration files, not files installed or overwritten by this package.
 - Repository `AGENTS.md`: project commands, constraints, and conventions.
 - `CONTEXT-HYGIENE.md`: extension design and output contracts.
 - Individual requests: the actual outcome, operation, constraints, and acceptance evidence.
@@ -18,7 +19,7 @@ The local policy adapts those recommendations rather than granting unlimited aut
 
 Do not paste all of this guide into every request or add a second global autonomy policy. Explicit task instructions may narrow normal autonomy.
 
-A custom `SYSTEM.md` retains tool schemas, project context, skill injection, and extension event wiring. It bypasses Pi's default prompt body, including generated tool-snippet/guideline prose; essential tool-use guidance therefore lives in the custom prompt. Project-local or CLI system-prompt overrides can supersede the global file. After Pi upgrades, compare the installed default prompt for useful changes instead of blindly copying it. `SYSTEM.md` carries no maintenance prose, since every request would pay for it; this section is the maintenance note. Retain project/skill injection and do not duplicate this policy in `APPEND_SYSTEM.md`. The equivalent policy for other harnesses lives in `~/.agents/AGENTS.md`; `SYSTEM.md` is deliberately self-contained, so change both when the shared policy moves.
+A custom `SYSTEM.md` retains tool schemas, project context, skill injection, and extension event wiring. It bypasses Pi's default prompt body, including generated tool-snippet/guideline prose; essential tool-use guidance therefore lives in the custom prompt. Project-local or CLI system-prompt overrides can supersede the global file. After Pi upgrades, compare the installed default prompt for useful changes instead of blindly copying it. `SYSTEM.md` carries no maintenance prose, since every request would pay for it; this section is the maintenance note. Retain project/skill injection and do not duplicate policy in `APPEND_SYSTEM.md`. Verify that the shared agreement reaches both the parent and child launch paths before removing duplicates. A configuration that disables context files must supply its safety policy explicitly; the Pi-specific prompt alone is not a replacement for the shared agreement.
 
 ## Context without the rolling guard
 
@@ -49,7 +50,7 @@ Reload extensions or start a new Pi session after upgrading. A running session m
 
 ## Research before asking
 
-Inspect local evidence first for repository-specific questions. Use targeted `exa-search` queries when available for current external facts, unfamiliar public APIs, or unresolved public technical questions, then fetch the relevant primary source. If Exa is unavailable or extraction fails, use another available fetch/search method and disclose unresolved uncertainty. Do not turn every task into a web search.
+Inspect local evidence first for repository-specific questions and version-matched installed docs for Pi APIs. Follow the shared policy for current public library documentation: use Context7 when available; use targeted `exa-search` queries for recency-sensitive facts or when Context7 is unavailable, then fetch the relevant primary source. If Exa is unavailable or extraction fails, use another available fetch/search method and disclose unresolved uncertainty. Do not turn every task into a web search.
 
 Do not send secrets, private code, or identifying internal details to external search. Ask the user about genuine choices that public documentation cannot settle.
 
@@ -96,5 +97,7 @@ Use comparable clean checkouts and fresh sessions for repeated real tasks. Chang
 - tool calls, repeated reads, and evidence-recovery calls;
 - user interventions and unnecessary approval questions;
 - tokens/cost when available and regressions or unwanted changes.
+
+Use the small [behavioral evaluation set](harness-evaluation.md) before changing prompts or adding agent profiles. It separates deterministic contract checks from model-mediated observations; passing unit tests alone does not establish improved agent behavior.
 
 No controlled low-versus-medium benchmark was performed as part of this patch. The reason for removing the guard is observed evidence loss and recovery work, not a claimed universal speedup.

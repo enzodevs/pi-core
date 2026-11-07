@@ -1,4 +1,5 @@
 {
 	"$schema": "./node_modules/fallow/schema.json",
+	"ignoreBinaries": ["agent-memory"],
 	"entry": ["extensions/*/index.ts", "extensions/memory/run-consolidator.ts", "extensions/whatsapp/worker.ts"]
 }

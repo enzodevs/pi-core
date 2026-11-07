@@ -7,6 +7,7 @@ import { formatMemoryContext, mergeMemoryHits, parseMemoryHits } from "./context
 const SEARCH_TIMEOUT_MS = 1_500;
 const JOURNAL_TIMEOUT_MS = 2_000;
 const MEMORY_MESSAGE_TYPE = "pi-core-memory-context";
+const LOOKUP_ATTEMPT_TYPE = "pi-core-memory-lookup-attempt";
 function maintenanceSummary(label: string, stdout: string): string {
 	try {
 		const value = JSON.parse(stdout) as {
@@ -42,7 +43,17 @@ export default function memoryContext(pi: ExtensionAPI): void {
 	const globalRoot = path.join(os.homedir(), ".agents", "memory", "global");
 
 	pi.on("session_start", async (_event, ctx) => {
-		openingLookupAttempted = false;
+		// Inspect all entries, not just the active branch: this is a session-wide
+		// attempt. Forks with inherited history also keep their opening context.
+		// Existing user messages cover legacy sessions without an attempt marker.
+		openingLookupAttempted = ctx.sessionManager
+			.getEntries()
+			.some(
+				(entry) =>
+					(entry.type === "custom" && entry.customType === LOOKUP_ATTEMPT_TYPE) ||
+					(entry.type === "custom_message" && entry.customType === MEMORY_MESSAGE_TYPE) ||
+					(entry.type === "message" && entry.message.role === "user"),
+			);
 		if (isConsolidator) return;
 		await pi.exec("agent-memory", ["--from", ctx.cwd, "init", "--scope", "project"], {
 			timeout: JOURNAL_TIMEOUT_MS,
@@ -54,6 +65,9 @@ export default function memoryContext(pi: ExtensionAPI): void {
 		if (event.messageType === "custom") return;
 		if (isConsolidator || openingLookupAttempted || !event.prompt.trim()) return;
 		openingLookupAttempted = true;
+		// Persist before doing I/O, including empty, failed and interrupted searches.
+		// Custom entries never enter model context.
+		pi.appendEntry(LOOKUP_ATTEMPT_TYPE, { version: 1 });
 
 		const common = ["search", event.prompt, "--json", "--limit", "2", ...EMBEDDING_ARGS];
 		// The local embedding server is intentionally single-slot. Run searches
