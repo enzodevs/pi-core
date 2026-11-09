@@ -36,6 +36,14 @@ describe("managed skill prompt", () => {
 		expect(section).not.toContain("<name>off</name>");
 	});
 
+	it("guides skill selection by useful expertise and explicit requests, not keyword matches", () => {
+		const section = renderManagedSkills([makeSkill("review")], () => "full");
+		expect(section).toContain("adds relevant expertise or a necessary workflow");
+		expect(section).toContain("Do not load one solely because its description shares keywords");
+		expect(section).toContain("Follow explicitly requested skills");
+		expect(section).not.toContain("Read a listed SKILL.md when its description matches");
+	});
+
 	it("omits the section when no skills are model-visible", () => {
 		expect(renderManagedSkills([makeSkill("hidden")], () => "searchable")).toBe("");
 		expect(renderManagedSkills([makeSkill("disabled")], () => "off")).toBe("");

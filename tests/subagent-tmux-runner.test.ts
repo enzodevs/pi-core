@@ -125,6 +125,14 @@ describe("TmuxTuiRunner", () => {
 		expect(joined).toContain(`@${path.join(handle.runtime.channelDirectory, "task.md")}`);
 		expect(joined).not.toContain("--mode\nrpc");
 
+		const prompt = fs.readFileSync(path.join(handle.runtime.channelDirectory, "system.md"), "utf8");
+		expect(prompt).toContain(runOptions.agent.systemPrompt);
+		expect(prompt).toContain("Adapt the format to the task");
+		expect(prompt).toContain("Resolve routine decisions using the task context and your judgment");
+		expect(prompt).toContain("missing information or authority materially blocks progress");
+		expect(prompt).toContain("You may delegate only to these named child agents: reviewer.");
+		expect(prompt).not.toContain("Return only a concise final handoff: findings, exact file references");
+
 		const channel = openSidecarChannel({
 			directory: handle.runtime.channelDirectory,
 			token: handle.runtime.channelToken,

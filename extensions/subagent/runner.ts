@@ -25,7 +25,7 @@ import { type ChildLineage, encodeChildLineage, type PendingQuestion, RpcEventTr
 import { createTmuxClient, type TmuxClient, TmuxLaunchError } from "./tmux.ts";
 
 const HANDOFF_INSTRUCTION =
-	"Return only a concise final handoff: findings, exact file references, and actionable conclusions. Omit narration, tool transcripts, thinking, and repeated task text.";
+	"Return a concise result of the assigned task in a form the parent can act on. Include evidence and references where they support the result, and identify decisions or unresolved blockers that need attention. Adapt the format to the task; omit repeated instructions and tool transcripts.";
 const SIDECAR_CLEANUP_DELAY_MS = 15_000;
 
 export const SUBAGENT_EXTENSION_PATH = path.join(import.meta.dirname, "index.ts");
@@ -103,7 +103,7 @@ function systemPrompt(agent: AgentConfig): string {
 	const delegation = agent.children?.length
 		? `\nYou may delegate only to these named child agents: ${agent.children.join(", ")}.`
 		: "";
-	return `${prompt.trim()}\n\n${HANDOFF_INSTRUCTION}\nUse ask_parent for one blocking question instead of guessing.${delegation}\n`;
+	return `${prompt.trim()}\n\n${HANDOFF_INSTRUCTION}\nResolve routine decisions using the task context and your judgment. Use ask_parent when missing information or authority materially blocks progress; continue independent work when possible.${delegation}\n`;
 }
 
 async function writeLaunchFiles(

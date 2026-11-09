@@ -18,7 +18,8 @@ export function renderManagedSkills(skills: readonly Skill[], modeFor: (name: st
 	if (visible.length === 0) return "";
 	const lines = [
 		"\n\nThe following skills provide specialized instructions for specific tasks.",
-		"Read a listed SKILL.md when its description matches the task. Use search_skills to discover relevant skills and load_skill to load one by exact name.",
+		"Use a skill when it adds relevant expertise or a necessary workflow to the task. Do not load one solely because its description shares keywords with the request. Follow explicitly requested skills and read supporting references as needed.",
+		"Use search_skills to discover relevant skills and load_skill to load one by exact name.",
 		"When a skill references a relative path, resolve it against the skill directory.",
 		"",
 		"<available_skills>",
