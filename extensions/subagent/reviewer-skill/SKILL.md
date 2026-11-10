@@ -1,10 +1,10 @@
 ---
 name: evidence-first-code-review
-description: Perform high-signal, repository-aware code reviews with deterministic changed-file coverage, explicit candidate validation, counterexample search, severity/confidence calibration, and a machine-checked evidence ledger. Use whenever the user asks to review a diff, branch, commit, pull request, staged or uncommitted work, WIP, patch, implementation before commit/push/merge/deploy, or asks for an independent reviewer—even if they only say “is this safe to ship?”, “review this”, “check the WIP”, or “have another agent look at it.” Prefer this over an unstructured review prompt for consequential changes, CI/CD, security, authorization, multi-tenancy, data migrations, concurrency, infrastructure, or cross-component behavior.
+description: Conduct a formal code review with deterministic changed-file coverage and a machine-checked evidence ledger. Use when this workflow is explicitly requested or when the review requires auditable coverage and findings.
 compatibility: Requires Git and Python 3.11+. The bundled runtime helpers use only the Python standard library.
 metadata:
   author: rrghost
-  version: 0.3.1
+  version: 0.3.2
 ---
 
 # Evidence-first code review
@@ -192,7 +192,7 @@ Prefer a fresh reviewer context for the final pre-merge pass. Independence reduc
 
 ## Efficiency controls
 
-- For small diffs, use one reviewer and the same evidence contract without multi-agent ceremony. For large diffs, use bounded bundles and explicit cross-bundle review.
+- Use this workflow when its evidence and coverage guarantees justify the overhead. Ordinary reviews do not require this skill.
 - Narrow deterministically before reading deeply.
 - Use cheap searches and source inspection to decide which execution is valuable.
 - Parallelize independent bundles only within available capacity.

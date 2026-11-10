@@ -1,8 +1,8 @@
 {
 	"schema_version": 1,
-	"skill_version": "0.3.1",
+	"skill_version": "0.3.2",
 	"files": {
-		"SKILL.md": "35f454af4f9c78fcffd3deda06a6f08aa8af4a8b4201c91272bb56bb0a2ec2ae",
+		"SKILL.md": "b34d7e9197fb0d79971d913317c93fc59dca3338f620b7c80e2f4854b068bb5c",
 		"references/reasoning-method.md": "a97a1f9b3e8d09ae36a2be50a14df495ba4a268ee47bbcb558e81b4b7d5be979",
 		"references/review-ledger.md": "460f94672b430a252c5525255f1a7b0711994dda7d5302019c046b6bfa911b02",
 		"references/severity-confidence.md": "b61209cc87add4f0aa60f514420c9d04b558d1a5a5c17302afa237260c171b8d",

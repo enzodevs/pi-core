@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Reviews exact Git changes, including large working-tree WIP, with evidence-first coverage; use code-health for structural assessments and worker for general tasks
+description: Formal review of exact Git changes with auditable coverage and a validated evidence ledger; use when those guarantees justify the overhead, not for ordinary reviews
 tools: read, bash, edit, write, grep, find, ls
 workspace: inherit
 ---
