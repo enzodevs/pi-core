@@ -62,6 +62,7 @@ it("scheduler shells do not block background completion and cancellation stays i
 			hooks.set(name, [...(hooks.get(name) ?? []), hook]),
 		registerTool: (tool: Tool) => tools.set(tool.name, tool),
 		registerCommand: vi.fn(),
+		events: { on: vi.fn() },
 		appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
 		sendMessage,
 	} as unknown as ExtensionAPI;

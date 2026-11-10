@@ -1,7 +1,6 @@
 import { stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
-	createBashToolDefinition,
 	createEditToolDefinition,
 	createFindToolDefinition,
 	createGrepToolDefinition,
@@ -13,6 +12,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, type TSchema, Type } from "typebox";
+import { createManagedBashDefinition } from "../background-process/foreground.js";
 
 // Tool-result handlers have the startup CWD, not this tool's execution CWD.
 export const READ_CWD_KEY = "piCoreReadCwd";
@@ -76,7 +76,7 @@ export default function sessionCwd(pi: ExtensionAPI): void {
 		};
 	}
 
-	pi.registerTool(dynamic(createBashToolDefinition));
+	pi.registerTool(dynamic((cwd) => createManagedBashDefinition(cwd, pi)));
 	pi.registerTool(dynamic(createReadToolDefinition));
 	pi.registerTool(dynamic(createWriteToolDefinition));
 	pi.registerTool(dynamic(createEditToolDefinition));

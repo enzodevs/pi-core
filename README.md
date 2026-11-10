@@ -68,10 +68,10 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 ### Requirements
 
 - Node.js 22.19.0 or newer
-- Pi 1.5.0 (the tested baseline; Pi peer dependencies use the 1.x compatibility range)
+- Pi 1.5.1 (the tested baseline; Pi peer dependencies use the 1.x compatibility range)
 - A working Pi installation
 
-See the [Pi 1.5.0 reconciliation](docs/pi-1.5.0.md) for the current compatibility review, the [Pi 1.4.0 reconciliation](docs/pi-1.4.0.md) for the previous baseline, and the [Pi 1.2.0 reconciliation](docs/pi-1.2.0.md) for remote clipboard limitations.
+See the [Pi 1.5.1 reconciliation](docs/pi-1.5.1.md) for the current compatibility review, the [Pi 1.5.0 reconciliation](docs/pi-1.5.0.md) for the previous baseline, and the [Pi 1.2.0 reconciliation](docs/pi-1.2.0.md) for remote clipboard limitations.
 
 ### Install from GitHub
 
@@ -267,6 +267,10 @@ A settled TUI child seals its final handoff, shows a short completion notice, an
 
 ## Background processes
 
+In the interactive TUI, `bash` commands that are still running after 10 seconds automatically hand off to the existing process manager. Fast commands retain Pi's normal output and exit status. A handoff returns `status: "running"` and `process_id`, with no `exit_code`; this also applies to `tools.bash()` in codemode, so await the process result before depending on its output. The command is never restarted, and its original timeout remains a cancellation deadline, not the handoff threshold. Search logs or cancel with `process_control`, `/ps`, or `/stop`; completion is steered to the next safe model boundary, or resumes the agent if it is idle. The finished tool call's abort signal no longer owns the process after handoff.
+
+This integration uses the `session-cwd` bash wrapper and Pi's native shell backend, preserving the execution directory and session environment. Print, JSON and RPC modes remain synchronous; missing process support or a full process manager also keeps normal foreground execution. No tmux is required. Ending an interactive turn leaves the process running, but ending the session stops it.
+
 The `background_process` tool runs any shell command asynchronously without spending a model-backed child. Its required mode makes the lifecycle contract explicit:
 
 - `wait` expects a terminal result, making it suitable for CI gates, deployments, and provider-native watchers such as `gh run watch <id> --exit-status`.
@@ -287,7 +291,7 @@ background_process(
 )
 ```
 
-Each process receives a short ID. Combined stdout/stderr is retained beneath `~/.pi/agent/pi-core/processes/` in two private rotating 4 MiB segments, so noisy services cannot grow storage without bound. Unread completions stay local while the parent is busy, then arrive in a bounded batch after it settles. Each notification is at most 4 KiB, with a short excerpt per process; explicit `wait` reads retain the full bounded 4 KiB tail. Results already read through `wait` or a targeted terminal `status` are acknowledged persistently and are not replayed as new turns. A timed-out or cancelled wait, a running status, or a status listing does not consume a future completion. `process_control` keeps all model-facing inspection bounded:
+Each process receives a short ID. Combined stdout/stderr is retained beneath `~/.pi/agent/pi-core/processes/` in two private rotating 4 MiB segments, so noisy services cannot grow storage without bound. Unread completions are coalesced into bounded batches and delivered through Pi's steering queue, after the current assistant turn's tools finish and before the next model call. An idle agent resumes automatically. Only one receipt is queued at a time; later batches can follow as soon as that receipt arrives, without waiting for the parent to settle. Each notification is at most 4 KiB, with a short excerpt per process; explicit `wait` reads retain the full bounded 4 KiB tail. Results already read through `wait` or a targeted terminal `status` are acknowledged persistently and are not replayed as new turns. A timed-out or cancelled wait, a running status, or a status listing does not consume a future completion. `process_control` keeps all model-facing inspection bounded:
 
 | Action | Behavior |
 | --- | --- |
@@ -448,7 +452,7 @@ Pi-core compatibility boundaries:
 
 ## Development
 
-Development uses Node.js 24 LTS pinned in `.node-version`; both development and published extensions require Node.js 22.19.0 or newer, matching Pi 1.5.0. All four Pi development packages are pinned to the same version.
+Development uses Node.js 24 LTS pinned in `.node-version`; both development and published extensions require Node.js 22.19.0 or newer, matching Pi 1.5.1. All four Pi development packages are pinned to the same version.
 
 ```bash
 make install

@@ -38,6 +38,9 @@ interface Tool {
 	) => Promise<{ content: { text: string }[]; details: Record<string, unknown> }>;
 }
 
+const disposals: (() => Promise<void>)[] = [];
+const flushDelivery = () => new Promise<void>((resolve) => setImmediate(resolve));
+
 function harness(entries: Entry[] = []) {
 	let idle = false;
 	const hooks = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
@@ -51,9 +54,11 @@ function harness(entries: Entry[] = []) {
 		jobs.push({ finish, done });
 		return done;
 	});
-	const sendMessage = vi.fn((message: Notification) => {
-		entries.push({ type: "custom_message", ...message });
-	});
+	const sendMessage = vi.fn(
+		(message: Notification, _options: { deliverAs: string; triggerTurn: boolean }) => {
+			entries.push({ type: "custom_message", ...message });
+		},
+	);
 	const ctx = {
 		cwd: mocks.root,
 		isIdle: () => idle,
@@ -65,13 +70,15 @@ function harness(entries: Entry[] = []) {
 			hooks.set(event, handler),
 		registerTool: (tool: Tool) => tools.set(tool.name, tool),
 		registerCommand: vi.fn(),
+		events: { on: vi.fn() },
 		appendEntry: (customType: string, data: Entry["data"]) =>
 			entries.push({ type: "custom", customType, data }),
 		sendMessage,
 	} as unknown as ExtensionAPI);
-	const emit = async (name: string) => {
-		await hooks.get(name)?.({}, ctx);
+	const emit = async (name: string, event: unknown = {}) => {
+		await hooks.get(name)?.(event, ctx);
 	};
+	disposals.push(() => emit("session_shutdown"));
 	const getTool = (name: string) => {
 		const tool = tools.get(name);
 		if (!tool) throw new Error(`Tool not registered: ${name}`);
@@ -118,7 +125,8 @@ beforeEach(() => {
 	mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-process-delivery-"));
 	mocks.launch.mockReset();
 });
-afterEach(() => {
+afterEach(async () => {
+	await Promise.all(disposals.splice(0).map((dispose) => dispose()));
 	vi.useRealTimers();
 	fs.rmSync(mocks.root, { recursive: true, force: true });
 });
@@ -152,7 +160,7 @@ describe("background process completion delivery", () => {
 		expect(app.sendMessage).not.toHaveBeenCalled();
 	});
 
-	it("batches only unread outcomes after the parent settles", async () => {
+	it("batches only unread outcomes while the parent is still working", async () => {
 		const app = harness();
 		await app.emit("session_start");
 		const consumed = await app.start();
@@ -163,8 +171,9 @@ describe("background process completion delivery", () => {
 		await app.finish(2, { status: "stopped", exitCode: null });
 		await app.control({ action: "wait", id: consumed });
 		expect(app.sendMessage).not.toHaveBeenCalled();
-		await app.settle();
+		await flushDelivery();
 		expect(app.sendMessage).toHaveBeenCalledTimes(1);
+		expect(app.sendMessage.mock.calls[0][1]).toEqual({ deliverAs: "steer", triggerTurn: true });
 		const [notification] = app.sendMessage.mock.calls[0];
 		expect(notification.details.ids).toEqual([failure, service]);
 		expect(notification.content).toContain("missing configuration");
@@ -247,11 +256,44 @@ describe("background process completion delivery", () => {
 		const second = await app.start();
 		app.setIdle(true);
 		await app.finish(0);
+		await flushDelivery();
+		expect(app.sendMessage.mock.calls[0][1]).toEqual({ deliverAs: "steer", triggerTurn: true });
 		await app.finish(1);
+		await flushDelivery();
 		expect(app.sendMessage).toHaveBeenCalledTimes(1);
 		await app.settle();
 		expect(app.sendMessage).toHaveBeenCalledTimes(2);
 		expect(app.sendMessage.mock.calls[1][0].details.ids).toEqual([second]);
+	});
+
+	it("delivers later completions once the first receipt arrives, without waiting for idle", async () => {
+		const app = harness();
+		await app.emit("session_start");
+		await app.start();
+		const second = await app.start();
+		await app.finish(0);
+		await flushDelivery();
+		await app.finish(1);
+		await flushDelivery();
+		expect(app.sendMessage).toHaveBeenCalledTimes(1);
+		await app.emit("message_end", {
+			message: { role: "custom", ...app.sendMessage.mock.calls[0][0] },
+		});
+		await flushDelivery();
+		expect(app.sendMessage).toHaveBeenCalledTimes(2);
+		expect(app.sendMessage.mock.calls[1][0].details.ids).toEqual([second]);
+		await app.settle();
+		expect(app.sendMessage).toHaveBeenCalledTimes(2);
+	});
+
+	it("cancels scheduled delivery on shutdown", async () => {
+		const app = harness();
+		await app.emit("session_start");
+		await app.start();
+		await app.finish(0);
+		await app.emit("session_shutdown");
+		await flushDelivery();
+		expect(app.sendMessage).not.toHaveBeenCalled();
 	});
 
 	it("bounds batches without acknowledging results that did not fit", async () => {

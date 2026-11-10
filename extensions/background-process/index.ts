@@ -3,6 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { FOREGROUND_PROCESS_EVENT, type ForegroundProcessRequest } from "./foreground.js";
 import { type ProcessLog, ProcessLogStore } from "./log-store.js";
 import {
 	boundedProcessTail,
@@ -48,11 +49,12 @@ export interface BackgroundProcessRun {
 	deliveryQueued?: boolean;
 	waiters?: Set<() => void>;
 	generation: number;
+	foreground?: boolean;
 }
 
 export interface PersistedBackgroundProcessRun
 	extends Partial<
-		Omit<BackgroundProcessRun, "log" | "handle" | "deliveryQueued" | "waiters" | "generation">
+		Omit<BackgroundProcessRun, "log" | "handle" | "deliveryQueued" | "waiters" | "generation" | "foreground">
 	> {
 	id: string;
 }
@@ -237,6 +239,8 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 	let currentCtx: ExtensionContext | undefined;
 	let branchGeneration = 0;
 	let deliveryInFlight = false;
+	let deliveryTimer: ReturnType<typeof setImmediate> | undefined;
+	let unsubscribeForeground: (() => void) | undefined;
 
 	const updateStatus = () => {
 		if (!currentCtx) return;
@@ -284,8 +288,8 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 		return true;
 	};
 	const deliver = () => {
-		// Keep unread results locally until the parent can consume one batch, not a queue of stale turns.
-		if (!currentCtx?.isIdle() || deliveryInFlight) return;
+		// One bounded receipt at a time; Pi steers it at the next safe model boundary.
+		if (!currentCtx || deliveryInFlight) return;
 		const batch: BackgroundProcessRun[] = [];
 		let content =
 			"Unread background process results. No acknowledgement reply is required. Use process_control wait/search for more detail.\n";
@@ -308,13 +312,25 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 					display: true,
 					details: { ids: batch.map((run) => run.id) },
 				},
-				{ deliverAs: "followUp", triggerTurn: true },
+				{ deliverAs: "steer", triggerTurn: true },
 			);
 		} catch {
 			deliveryInFlight = false;
 			for (const run of batch) run.deliveryQueued = false;
 			currentCtx.ui.notify("Background results could not be delivered; delivery will retry.", "warning");
 		}
+	};
+	const scheduleDelivery = () => {
+		if (deliveryTimer) return;
+		// Let active waiters consume their results and coalesce completions from this tick.
+		deliveryTimer = setImmediate(() => {
+			deliveryTimer = undefined;
+			deliver();
+		});
+	};
+	const cancelDelivery = () => {
+		if (deliveryTimer) clearImmediate(deliveryTimer);
+		deliveryTimer = undefined;
 	};
 	const finish = (run: BackgroundProcessRun, result: ProcessResult) => {
 		run.status = result.status;
@@ -323,13 +339,13 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 		run.logBytes = result.logBytes;
 		run.finishedAt = Date.now();
 		run.handle = undefined;
-		const waited = Boolean(run.waiters?.size);
+		if (run.foreground) return;
 		run.delivery = "pending";
 		run.deliveryQueued = false;
 		persist(run);
 		updateStatus();
 		for (const notify of [...(run.waiters ?? [])]) notify();
-		if (!waited) deliver();
+		scheduleDelivery();
 		prune();
 	};
 	const fail = (run: BackgroundProcessRun, error: unknown) =>
@@ -345,6 +361,7 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 		return true;
 	};
 	const restore = (ctx: ExtensionContext, reason: string) => {
+		cancelDelivery();
 		branchGeneration++;
 		deliveryInFlight = false;
 		for (const run of runs.values()) run.handle?.stop();
@@ -380,7 +397,7 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 				persist(run);
 			}
 		}
-		deliver();
+		scheduleDelivery();
 		prune();
 		updateStatus();
 	};
@@ -388,6 +405,8 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 		[...runs.values()].sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_RECENT_RUNS);
 
 	pi.on("session_start", (_event, ctx) => {
+		unsubscribeForeground?.();
+		unsubscribeForeground = pi.events.on(FOREGROUND_PROCESS_EVENT, trackForeground);
 		currentCtx = ctx;
 		logStore = new ProcessLogStore({ root: sessionLogDirectory(ctx.sessionManager.getSessionId()) });
 		restore(ctx, "Parent session restarted before process completion.");
@@ -395,6 +414,14 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 	pi.on("session_tree", (_event, ctx) => {
 		currentCtx = ctx;
 		restore(ctx, "Parent changed session branch before process completion.");
+	});
+	pi.on("message_end", (event) => {
+		if (event.message.role !== "custom" || event.message.customType !== RESULT_TYPE) return;
+		deliveryInFlight = false;
+		for (const run of runs.values()) {
+			if (run.delivery === "pending") acknowledge(run);
+		}
+		scheduleDelivery();
 	});
 	pi.on("agent_settled", () => {
 		deliveryInFlight = false;
@@ -406,12 +433,64 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 		deliver();
 	});
 	pi.on("session_shutdown", () => {
+		cancelDelivery();
+		unsubscribeForeground?.();
+		unsubscribeForeground = undefined;
 		branchGeneration++;
 		for (const run of runs.values()) run.handle?.stop();
 		runs.clear();
 		logStore = undefined;
 		currentCtx = undefined;
 	});
+
+	const trackForeground = (data: unknown) => {
+		const request = data as ForegroundProcessRequest;
+		if (
+			!logStore ||
+			[...runs.values()].filter((run) => run.status === "running").length >= MAX_CONCURRENT_RUNS
+		)
+			return;
+		let id = newId();
+		while (runs.has(id)) id = newId();
+		const log = logStore.create(id);
+		const run: BackgroundProcessRun = {
+			id,
+			command: request.command,
+			cwd: request.cwd,
+			mode: "wait",
+			timeoutSeconds: request.timeoutSeconds,
+			status: "running",
+			delivery: "none",
+			startedAt: Date.now(),
+			logBytes: 0,
+			log,
+			handle: { stop: request.stop },
+			generation: branchGeneration,
+			foreground: true,
+		};
+		runs.set(id, run);
+		request.accept({
+			id,
+			log,
+			promote: () => {
+				if (!ownsProcess(runs, run, branchGeneration)) return;
+				run.foreground = false;
+				if (run.status !== "running") run.delivery = "pending";
+				persist(run);
+				updateStatus();
+				scheduleDelivery();
+			},
+			finish: (result) => {
+				log.close();
+				if (ownsProcess(runs, run, branchGeneration)) finish(run, result);
+			},
+			release: () => {
+				if (!ownsProcess(runs, run, branchGeneration)) return;
+				runs.delete(id);
+				log.remove();
+			},
+		});
+	};
 
 	pi.registerTool({
 		name: "background_process",
@@ -481,7 +560,7 @@ export default function backgroundProcess(pi: ExtensionAPI): void {
 		name: "process_control",
 		label: "Process Control",
 		description:
-			"Inspect, await, search bounded logs for, or stop a session-owned background process. Terminal wait/status reads consume its completion notification. Use action=wait for dependencies; never use shell sleep or polling loops.",
+			"Inspect, await, search bounded logs for, or stop a session-owned background process. Completion is steered automatically at the next safe model boundary, or resumes an idle session; continue independent work instead of polling. Terminal wait/status reads consume the notification. Use wait when the next step needs the result or in single-shot print mode.",
 		parameters: ProcessControlParams,
 		async execute(_toolCallId, params, signal) {
 			if (params.action === "status") {

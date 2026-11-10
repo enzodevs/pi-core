@@ -2,3 +2,4 @@ node_modules/
 coverage/
 .fallow/
 *.tgz
+__pycache__/
