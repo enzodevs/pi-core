@@ -116,10 +116,11 @@ describe("TmuxTuiRunner", () => {
 		expect(split.some((arg) => arg.startsWith("PI_CORE_SUBAGENT_CONTEXT="))).toBe(true);
 		const joined = split.join("\n");
 		expect(joined).toContain("PI_CORE_SUBAGENT_CHANNEL=");
-		expect(joined).toContain("--no-extensions");
+		expect(joined).not.toContain("--no-extensions");
 		expect(joined).toContain(path.resolve("extensions/subagent/index.ts"));
-		expect(joined).toContain("--no-skills");
-		expect(joined).toContain("--no-prompt-templates");
+		expect(joined).not.toContain("--no-skills");
+		expect(joined).not.toContain("--no-prompt-templates");
+		expect(joined).not.toContain("--no-approve");
 		expect(joined).toContain("--session");
 		expect(joined).toContain("read,codemode,ask_parent,background_agent,agent_control");
 		expect(joined).toContain(`@${path.join(handle.runtime.channelDirectory, "task.md")}`);

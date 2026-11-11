@@ -26,7 +26,7 @@ describe("bundled code-health agent", () => {
 			workspace: "worktree",
 			workspaceSource: "bundled",
 			children: ["reviewer"],
-			tools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
+			tools: undefined,
 		});
 		expect(agent?.model).toBeUndefined();
 	});

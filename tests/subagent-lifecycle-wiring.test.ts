@@ -65,6 +65,8 @@ function harness(initial: ReturnType<typeof storedRun>[] = []) {
 		registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) =>
 			tools.set(tool.name, tool),
 		registerCommand: vi.fn(),
+		getActiveTools: () => ["read", "background_process"],
+		getFlag: () => undefined,
 		sendMessage: vi.fn(),
 		appendEntry: vi.fn((customType: string, data: ReturnType<typeof storedRun>) =>
 			entries.push({ type: "custom", customType, data }),
@@ -134,6 +136,9 @@ describe("worktree lifecycle Pi wiring", () => {
 		await h.start();
 		await h.execute("background_agent", { agent: "worker", task: "implement task" });
 		await vi.waitFor(() => expect(h.verify).toHaveBeenCalledOnce());
+		expect(runner.runAgent).toHaveBeenCalledWith(
+			expect.objectContaining({ parentTools: ["read", "background_process"] }),
+		);
 		expect(h.pi.sendMessage).not.toHaveBeenCalled();
 		expect(h.terminal).toHaveBeenCalledOnce();
 		resolve(receipt);

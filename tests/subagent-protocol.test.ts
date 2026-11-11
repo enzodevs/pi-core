@@ -19,7 +19,6 @@ import {
 import {
 	buildChildArgs,
 	buildChildTools,
-	CHILD_EXTENSION_PATHS,
 	parentPromptCommand,
 	SUBAGENT_EXTENSION_PATH,
 } from "../extensions/subagent/runner.js";
@@ -120,7 +119,7 @@ describe("subagent lineage and delegation", () => {
 		).toEqual(["read", "grep", "codemode", "ask_parent"]);
 	});
 
-	it("keeps empty profiles restricted to computation and the child control tool", () => {
+	it("keeps default profiles open to Pi tools, extensions and the parent's active tools", () => {
 		const ctx = { model: null, thinkingLevel: "low" } as unknown as ExtensionContext;
 		const restricted = agent({ tools: undefined, children: [] });
 		const args = buildChildArgs(
@@ -130,11 +129,21 @@ describe("subagent lineage and delegation", () => {
 		const toolsIndex = args.indexOf("--tools");
 
 		expect(buildChildTools(restricted, { ...first, allowedChildren: [] })).toEqual([
-			"codemode",
-			"ask_parent",
+			"+codemode",
+			"+ask_parent",
 		]);
 		expect(toolsIndex).toBeGreaterThan(-1);
-		expect(args[toolsIndex + 1]).toBe("codemode,ask_parent");
+		expect(args[toolsIndex + 1]).toBe("+codemode,+ask_parent");
+		expect(
+			buildChildTools(restricted, { ...first, allowedChildren: [] }, [
+				"read",
+				"background_process",
+				"grep",
+				"background_agent",
+				"agent_control",
+				"ask_parent",
+			]),
+		).toEqual(["+read", "+background_process", "+grep", "+codemode", "+ask_parent"]);
 	});
 
 	it.each([
@@ -151,16 +160,9 @@ describe("subagent lineage and delegation", () => {
 
 		expect(args.slice(0, 3)).toEqual(["--mode", "rpc", "--no-session"]);
 		expect(args[extensionIndex + 1]).toBe(path.resolve(extensionPath));
-		expect(args.filter((arg) => arg === "--extension")).toHaveLength(4);
-		for (const extension of CHILD_EXTENSION_PATHS) {
-			expect(args[args.indexOf(extension) - 1]).toBe("--extension");
-			expect(fs.existsSync(extension)).toBe(true);
-		}
-		expect(args).toContain("--headroom-json");
-		expect(args).toContain("--nested-agents");
-		expect(args).toContain("--no-extensions");
-		expect(args).toContain("--no-skills");
-		expect(args).toContain("--no-prompt-templates");
+		expect(args.filter((arg) => arg === "--extension")).toHaveLength(1);
+		for (const flag of ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-approve"])
+			expect(args).not.toContain(flag);
 		expect(args[toolsIndex + 1]?.split(",")).toEqual([
 			"read",
 			"codemode",

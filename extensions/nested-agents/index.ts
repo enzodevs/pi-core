@@ -1,13 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import {
-	type ExtensionAPI,
-	type ExtensionContext,
-	getAgentDir,
-	isReadToolResult,
-	ProjectTrustStore,
-} from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, isReadToolResult } from "@earendil-works/pi-coding-agent";
 import { READ_CWD_KEY } from "../session-cwd/index.js";
 import {
 	addNestedGuides,
@@ -17,25 +11,14 @@ import {
 	type StartupGuide,
 } from "./core.js";
 
-/**
- * Subagents run with --no-approve so project resources stay off, which also makes
- * ctx.isProjectTrusted() false. Only the user's saved decision re-enables guide reads there.
- */
-function hasSavedChildTrust(cwd: string): boolean {
-	return (
-		Boolean(process.env.PI_CORE_SUBAGENT_CONTEXT) && new ProjectTrustStore(getAgentDir()).get(cwd) === true
-	);
-}
-
 export default function nestedAgents(pi: ExtensionAPI): void {
 	let override: boolean | undefined;
 	let root: string | undefined;
 	let startup: StartupGuide[] = [];
 	let contextAvailable = false;
-	let childTrusted = false;
 	const enabled = () => override ?? pi.getFlag("nested-agents") === true;
 	const allowed = (ctx: ExtensionContext) =>
-		enabled() && (ctx.isProjectTrusted() || childTrusted) && contextAvailable && root !== undefined;
+		enabled() && ctx.isProjectTrusted() && contextAvailable && root !== undefined;
 
 	pi.registerFlag("nested-agents", {
 		description: "Opt in to bounded, project-contained nested guides on successful reads",
@@ -62,7 +45,6 @@ export default function nestedAgents(pi: ExtensionAPI): void {
 		startup = [];
 		contextAvailable = false;
 		override = undefined;
-		childTrusted = hasSavedChildTrust(ctx.cwd);
 		try {
 			const candidate = await projectRoot(ctx.cwd);
 			if (candidate !== (await realpath(homedir())) && dirname(candidate) !== candidate) root = candidate;

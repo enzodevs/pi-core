@@ -1,7 +1,6 @@
 ---
 name: worker
-description: General-purpose subagent with full built-in coding capabilities, isolated context
-tools: read, write, edit, bash, grep, find, ls
+description: General-purpose subagent with the normal Pi tools, extensions and skills, isolated context
 children: reviewer
 workspace: worktree
 ---

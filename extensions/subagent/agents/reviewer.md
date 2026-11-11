@@ -1,7 +1,6 @@
 ---
 name: reviewer
 description: Formal review of exact Git changes with auditable coverage and a validated evidence ledger; use when those guarantees justify the overhead, not for ordinary reviews
-tools: read, bash, edit, write, grep, find, ls
 workspace: inherit
 ---
 

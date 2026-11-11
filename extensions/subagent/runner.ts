@@ -3,7 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionContext,
+	type RpcExtensionUIRequest,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
 import {
 	createSidecarChannel,
@@ -22,6 +26,7 @@ import { HerdrClient, type HerdrLocation } from "./herdr.ts";
 import type { SubagentLimits } from "./limits.ts";
 import { truncateUtf8 } from "./limits.ts";
 import { type ChildLineage, encodeChildLineage, type PendingQuestion, RpcEventTracker } from "./protocol.ts";
+import { forwardChildDialog } from "./rpc-ui.ts";
 import { createTmuxClient, type TmuxClient, TmuxLaunchError } from "./tmux.ts";
 
 const HANDOFF_INSTRUCTION =
@@ -29,10 +34,6 @@ const HANDOFF_INSTRUCTION =
 const SIDECAR_CLEANUP_DELAY_MS = 15_000;
 
 export const SUBAGENT_EXTENSION_PATH = path.join(import.meta.dirname, "index.ts");
-/** These add no tools, so children keep their allowlist while sharing speed and context behavior. */
-export const CHILD_EXTENSION_PATHS = ["fast-mode", "json-headroom", "nested-agents"].map((name) =>
-	path.join(import.meta.dirname, "..", name, "index.ts"),
-);
 
 interface TuiRuntimeFields {
 	sessionFile: string;
@@ -63,6 +64,8 @@ export interface RunAgentOptions {
 	limits: SubagentLimits;
 	model?: string;
 	thinking?: string;
+	parentTools?: string[];
+	resourceArgs?: string[];
 	onSpawn(handle: ChildHandle): void;
 	onQuestion(question: PendingQuestion): void;
 	onStatus(status: string): void;
@@ -142,19 +145,29 @@ function writeRpc(child: ChildProcessWithoutNullStreams, command: Record<string,
 	child.stdin.write(`${JSON.stringify(command)}\n`);
 }
 
-export function buildChildTools(agent: AgentConfig, lineage: ChildLineage): string[] {
-	const tools = new Set(agent.tools ?? []);
+export function buildChildTools(
+	agent: AgentConfig,
+	lineage: ChildLineage,
+	parentTools: string[] = [],
+): string[] {
+	// An explicit profile remains an opt-in restriction. Otherwise augment Pi's normal
+	// defaults, rather than an allowlist that removes tools registered by extensions.
+	const tools = new Set(agent.tools ?? parentTools);
+	for (const name of ["ask_parent", "background_agent", "agent_control"]) tools.delete(name);
 	tools.add("codemode");
 	tools.add("ask_parent");
 	if (lineage.allowedChildren.length > 0 && lineage.depth < lineage.limits.maxDepth) {
 		tools.add("background_agent");
 		tools.add("agent_control");
 	}
-	return [...tools];
+	return [...tools].map((name) => (agent.tools ? name : `+${name}`));
 }
 
 export function buildChildArgs(
-	options: Pick<RunAgentOptions, "agent" | "ctx" | "lineage" | "model" | "thinking">,
+	options: Pick<
+		RunAgentOptions,
+		"agent" | "ctx" | "lineage" | "model" | "thinking" | "parentTools" | "resourceArgs"
+	>,
 	systemPromptFile: string,
 	extensionPath = SUBAGENT_EXTENSION_PATH,
 	launch: { mode?: "rpc" | "tui"; sessionFile?: string; name?: string } = {},
@@ -162,23 +175,15 @@ export function buildChildArgs(
 	const args = launch.mode === "tui" ? [] : ["--mode", "rpc"];
 	if (launch.sessionFile) args.push("--session", path.resolve(launch.sessionFile));
 	else args.push("--no-session");
-	args.push(
-		"--no-extensions",
-		"--extension",
-		path.resolve(extensionPath),
-		...CHILD_EXTENSION_PATHS.flatMap((extension) => ["--extension", extension]),
-		"--headroom-json",
-		"--nested-agents",
-		"--no-skills",
-		"--no-prompt-templates",
-		"--no-approve",
-	);
+	// Keep normal discovery; the explicit path also supports a parent loaded with -e.
+	// Pi deduplicates it when this same extension is already configured as a package.
+	args.push(...(options.resourceArgs ?? []), "--extension", path.resolve(extensionPath));
 	const parentModel = options.ctx.model ? `${options.ctx.model.provider}/${options.ctx.model.id}` : undefined;
 	const model = options.model ?? options.agent.model ?? parentModel;
 	if (model) args.push("--model", model);
 	const thinking = options.thinking ?? (!options.agent.model ? options.ctx.thinkingLevel : undefined);
 	if (thinking) args.push("--thinking", thinking);
-	args.push("--tools", buildChildTools(options.agent, options.lineage).join(","));
+	args.push("--tools", buildChildTools(options.agent, options.lineage, options.parentTools).join(","));
 	args.push("--append-system-prompt", path.resolve(systemPromptFile));
 	if (launch.name) args.push("--name", launch.name);
 	return args;
@@ -204,6 +209,7 @@ class RpcRunner {
 				});
 				const tracker = new RpcEventTracker(options.limits.questionBytes);
 				const decoder = new StringDecoder("utf8");
+				const dialogs = new AbortController();
 				let stderr = "";
 				let buffer = "";
 				let settled = false;
@@ -224,6 +230,7 @@ class RpcRunner {
 				const finish = (error?: Error, output?: string) => {
 					if (settled) return;
 					settled = true;
+					dialogs.abort();
 					if (forceKill) clearTimeout(forceKill);
 					for (const reply of replies.values()) {
 						clearTimeout(reply.timer);
@@ -271,6 +278,19 @@ class RpcRunner {
 							finish(new Error(typeof error === "string" ? error : "Child RPC command failed."));
 							return;
 						}
+						if (raw && typeof raw === "object" && "type" in raw && raw.type === "extension_ui_request") {
+							void forwardChildDialog(
+								raw as RpcExtensionUIRequest,
+								options.ctx,
+								options.agent.name,
+								dialogs.signal,
+							)
+								.then((response) => {
+									if (response && !settled) writeRpc(child, response);
+								})
+								.catch((error) => finish(error instanceof Error ? error : new Error(String(error))));
+							return;
+						}
 						const event = tracker.consume(raw);
 						if (!event) return;
 						if (event.type === "question") {
@@ -294,6 +314,7 @@ class RpcRunner {
 					abort() {
 						if (settled) return;
 						aborted = true;
+						dialogs.abort();
 						try {
 							writeRpc(child, { type: "abort" });
 						} catch {

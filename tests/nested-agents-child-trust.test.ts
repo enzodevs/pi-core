@@ -7,7 +7,7 @@ import nestedAgents from "../extensions/nested-agents/index.js";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
-async function readIsScoped(saved: boolean | undefined, child: boolean): Promise<boolean> {
+async function readIsScoped(saved: boolean | undefined, child: boolean, trusted = false): Promise<boolean> {
 	const base = realpathSync(mkdtempSync(join(tmpdir(), "nested-child-trust-")));
 	try {
 		const project = join(base, "project");
@@ -26,7 +26,7 @@ async function readIsScoped(saved: boolean | undefined, child: boolean): Promise
 			registerCommand: vi.fn(),
 			getFlag: () => true,
 		} as unknown as ExtensionAPI;
-		const ctx = { cwd: project, isProjectTrusted: () => false } as unknown as ExtensionContext;
+		const ctx = { cwd: project, isProjectTrusted: () => trusted } as unknown as ExtensionContext;
 		nestedAgents(pi);
 		await handlers.get("session_start")?.({}, ctx);
 		handlers.get("before_agent_start")?.(
@@ -49,13 +49,18 @@ async function readIsScoped(saved: boolean | undefined, child: boolean): Promise
 	}
 }
 
-describe("nested guides under --no-approve", () => {
+describe("nested guides use the same effective trust in parents and children", () => {
 	afterEach(() => vi.unstubAllEnvs());
 
-	it("applies to a subagent only with a saved trust decision", async () => {
-		expect(await readIsScoped(true, true)).toBe(true);
+	it("does not override denied runtime trust with a saved decision in children", async () => {
+		expect(await readIsScoped(true, true)).toBe(false);
 		expect(await readIsScoped(false, true)).toBe(false);
 		expect(await readIsScoped(undefined, true)).toBe(false);
+	});
+
+	it("accepts effective trust without requiring a separately saved child decision", async () => {
+		expect(await readIsScoped(undefined, true, true)).toBe(true);
+		expect(await readIsScoped(undefined, false, true)).toBe(true);
 	});
 
 	it("does not let saved trust override a non-subagent --no-approve", async () => {

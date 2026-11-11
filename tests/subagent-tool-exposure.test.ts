@@ -6,6 +6,7 @@ import {
 	type AgentSession,
 	type AgentSessionEvent,
 	createAgentSession,
+	createCodemodeExtension,
 	DefaultResourceLoader,
 	SessionManager,
 	SettingsManager,
@@ -82,7 +83,7 @@ beforeEach(async () => {
 	// Do not bind this synthetic lineage to a real inherited child sidecar.
 	vi.stubEnv("PI_CORE_SUBAGENT_CHANNEL", "");
 	vi.stubEnv("PI_CORE_SUBAGENT_CHANNEL_TOKEN", "");
-	const settingsManager = SettingsManager.inMemory({ defaultTools: [], codemode: { mode: "only" } });
+	const settingsManager = SettingsManager.inMemory({ defaultTools: [], codemode: { mode: "on" } });
 	const loader = new DefaultResourceLoader({
 		cwd: directory,
 		agentDir: join(directory, "agent"),
@@ -94,6 +95,7 @@ beforeEach(async () => {
 		noContextFiles: true,
 		additionalExtensionPaths: [SUBAGENT_EXTENSION_PATH],
 		extensionFactories: [
+			createCodemodeExtension(),
 			(pi) => {
 				pi.on("tool_call", (event) => {
 					if (event.toolName === "read" && event.input.path === "blocked.json") {
@@ -135,10 +137,10 @@ afterEach(async () => {
 });
 
 describe("default child codemode (real upstream sandbox, no provider requests)", () => {
-	it("works without parent settings or flags, keeps direct tools, and does not widen permissions", async () => {
+	it("uses upstream codemode and preserves an explicitly restricted profile", async () => {
 		const child = currentSession();
 		expect(child.getActiveToolNames()).toEqual(expect.arrayContaining(["read", "codemode", "ask_parent"]));
-		// Child on-mode overrides ambient only-mode, without adding prompt instructions.
+		// The child no longer overrides the configured codemode mode or disables model APIs.
 		expect(child.agent.state.tools.map((tool) => tool.name)).toEqual(
 			expect.arrayContaining(["read", "codemode", "ask_parent"]),
 		);
@@ -147,14 +149,14 @@ describe("default child codemode (real upstream sandbox, no provider requests)",
 			'return { models: typeof models, write: "write" in tools, bash: "bash" in tools, ask: "ask_parent" in tools, recursive: "codemode" in tools };',
 		);
 		expect(result.isError, text).not.toBe(true);
-		expect(text).toContain('"models":"undefined"');
+		expect(text).toContain('"models":"object"');
 		for (const name of ["write", "bash", "ask", "recursive"]) expect(text).toContain(`"${name}":false`);
 		const rejected = await script('await tools.write({ path: "items.json", content: "changed" });');
 		expect(rejected.result.isError).toBe(true);
 		expect(JSON.parse(await readFile(join(directory, "items.json"), "utf8"))).toHaveLength(2);
 	});
 
-	it("keeps multiple script outputs distinct without enabling child model APIs", async () => {
+	it("keeps multiple script outputs distinct without making provider requests", async () => {
 		const { result, text } = await script('text("OUTPUT_A"); text("OUTPUT_B"); console.log("OUTPUT_C");');
 		expect(result.isError, text).not.toBe(true);
 		expect(text).toMatch(

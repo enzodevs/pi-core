@@ -52,7 +52,7 @@ describe("packaged evidence-first reviewer", () => {
 			const reviewer = discoverAgents(cwd, "project").agents.find((agent) => agent.name === "reviewer");
 			expect(reviewer?.source).toBe("bundled");
 			expect(reviewer?.workspace).toBe("inherit");
-			expect(reviewer?.tools).toEqual(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+			expect(reviewer?.tools).toBeUndefined();
 			expect(reviewer?.systemPrompt).toContain("{{REVIEW_SKILL_DIR}}/SKILL.md");
 			expect(reviewer?.systemPrompt).toContain("Loading is mandatory");
 			expect(reviewer?.systemPrompt).toContain("Never edit, stage, commit");
