@@ -124,6 +124,7 @@ describe("Herdr terminal backend", () => {
 			const script = fs.readFileSync(path.join(channel.directory, "launch.sh"), "utf8");
 			expect(script).toContain("PI_CORE_SUBAGENT_CONTEXT=");
 			expect(script).toContain("PI_CORE_SUBAGENT_HERDR=1");
+			expect(script).toContain(`PI_CORE_SUBAGENT_NODE=${process.execPath}`);
 			expect(script).not.toContain("--no-extensions");
 			expect(script).not.toContain("--no-approve");
 			publishResult(channel, { status: "complete", output: "done", finishedAt: Date.now() });

@@ -124,7 +124,11 @@ export class HerdrClient {
 	async launch(params: Omit<TmuxPaneLaunch, "parentPane">, parentSession: string): Promise<HerdrLocation> {
 		if (!this.available()) throw new HerdrLaunchError("Herdr caller context is unavailable.");
 		const script = path.join(params.channelDirectory, "launch.sh");
-		const environment = { ...params.environment, PI_CORE_SUBAGENT_HERDR: "1" };
+		const environment = {
+			...params.environment,
+			PI_CORE_SUBAGENT_HERDR: "1",
+			PI_CORE_SUBAGENT_NODE: process.execPath,
+		};
 		fs.writeFileSync(
 			script,
 			`#!/bin/sh\nexec env ${Object.entries(environment)
