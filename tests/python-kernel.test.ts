@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	realpathSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -135,26 +144,28 @@ describe.skipIf(!available)("python kernel", () => {
 		expect(existsSync(join(dir, "callback-ran"))).toBe(false);
 	});
 
-	it("stops detached, daemonized and shell-background descendants on timeout", async () => {
+	it("stops shell background jobs in the kernel's process group on timeout", async () => {
 		const dir = temp();
-		const kernel = create(800);
-		const result = await kernel.exec(
-			[
-				"import subprocess, time",
-				"session = subprocess.Popen(['sleep', '30'], start_new_session=True)",
-				"open('session.pid', 'w').write(str(session.pid))",
-				// Double fork: the daemon's parent exits at once, so only the subreaper still links it.
-				"subprocess.run(['sh', '-c', 'setsid sh -c \"sleep 30 & echo \\$! > daemon.pid\" &'])",
-				"sh('sleep 30 & echo $! > job.pid; wait')",
-			].join("\n"),
-			dir,
-		);
+		const kernel = create(500);
+		const result = await kernel.exec("sh('sleep 30 & echo $! > job.pid; wait')", dir);
 		expect(result.status).toBe("timeout");
-		for (const name of ["session.pid", "daemon.pid", "job.pid"]) {
-			const pid = await pidFrom(dir, name);
-			expect(pid, name).toBeGreaterThan(0);
-			expect(await eventually(() => !alive(pid)), name).toBe(true);
-		}
+		expect(result.text).toContain("process group were stopped");
+		const job = await pidFrom(dir, "job.pid");
+		expect(job).toBeGreaterThan(0);
+		expect(await eventually(() => !alive(job))).toBe(true);
+	});
+
+	it("never runs a cell whose call was aborted while the kernel was starting", async () => {
+		const dir = temp();
+		const slow = join(temp(), "slow-python");
+		writeFileSync(slow, `#!/bin/sh\nsleep 0.4\nexec "${python}" "$@"\n`, { mode: 0o755 });
+		const kernel = new PythonKernel({ python: slow, cwd: dir, outputDir: temp() });
+		kernels.push(kernel);
+		const result = await kernel.exec("open('ran', 'w').close()", dir, abortAfter(100));
+		expect(result).toMatchObject({ status: "interrupted", text: "[cancelled before running]" });
+		await new Promise((resolve) => setTimeout(resolve, 700));
+		expect(existsSync(join(dir, "ran"))).toBe(false);
+		expect((await kernel.exec("1 + 1", dir)).text).toBe("2");
 	});
 
 	it("stops the kernel's children on dispose and after a crash", async () => {
@@ -196,37 +207,85 @@ describe.skipIf(!available)("python kernel", () => {
 		expect(fresh.text).toContain(moved);
 	});
 
-	it("keeps a bounded amount of old cell source", async () => {
+	it("keeps a bounded number of bytes of cell source, never one oversized cell", async () => {
 		const kernel = create();
 		const comment = `# ${"x".repeat(600_000)}\n`;
 		for (let cell = 0; cell < 4; cell++) await kernel.exec(`${comment}value = ${cell}`);
-		const kept = await kernel.exec(
-			"import linecache\nsum(len(''.join(entry[2])) for name, entry in linecache.cache.items() if name.startswith('<cell'))",
-		);
-		expect(Number(kept.text)).toBeLessThan(1_300_000);
+		const measure =
+			"import linecache\nsum(len(''.join(entry[2]).encode()) for name, entry in linecache.cache.items() if name.startswith('<cell'))";
+		expect(Number((await kernel.exec(measure)).text)).toBeLessThanOrEqual(1024 * 1024);
+		const huge = await kernel.exec(`# ${"😀".repeat(300_000)}\n${measure}`);
+		expect(Number(huge.text)).toBeLessThanOrEqual(1024 * 1024);
 		const failed = await kernel.exec("raise ValueError('still shows source')");
 		expect(failed.text).toContain("raise ValueError");
 	});
 
-	it("stops a cell whose output exceeds the capture limit, and bounds sh() capture", async () => {
+	it("re-enters a session directory that was removed and recreated", async () => {
+		const dir = temp();
 		const kernel = create();
-		// A cell that finishes before the watcher reacts still gets a bounded saved file.
+		await kernel.exec("1", dir);
+		rmSync(dir, { recursive: true });
+		mkdirSync(dir);
+		const result = await kernel.exec("import os\nopen('here', 'w').close()\nos.getcwd()", dir);
+		expect(result).toMatchObject({ status: "ok", text: `'${dir}'` });
+		expect(existsSync(join(dir, "here"))).toBe(true);
+	});
+
+	it("stops a running cell whose output passes the limit and saves exactly its start", async () => {
+		const kernel = create();
 		const burst = await kernel.exec(
 			"import os\nchunk = b'x' * 1048576\nfor _ in range(80):\n    os.write(1, chunk)",
 		);
-		expect(burst.text).toMatch(/output exceeded 64\.0MB/);
+		expect(burst.status).toBe("error");
+		expect(burst.text).toMatch(/output passed 64\.0MB/);
+		expect(burst.text).toContain("variables are gone");
+		expect(statSync(burst.fullOutputPath as string).size).toBe(64 * 1024 * 1024);
+
 		const flood = await kernel.exec("import os\nchunk = b'x' * 1048576\nwhile True:\n    os.write(1, chunk)");
 		expect(flood.status).toBe("error");
-		expect(flood.text).toMatch(/output exceeded 64\.0MB/);
-		expect(flood.text).toContain("variables are gone");
-		expect(flood.fullOutputPath).toBeDefined();
-		const { size } = await import("node:fs/promises").then((fs) => fs.stat(flood.fullOutputPath as string));
-		expect(size).toBeLessThanOrEqual(64 * 1024 * 1024);
+		expect(statSync(flood.fullOutputPath as string).size).toBe(64 * 1024 * 1024);
+	});
 
+	it("discards output that background processes write after their cell ended", async () => {
+		const kernel = create();
+		const cell = await kernel.exec(
+			[
+				"import subprocess, sys",
+				"late = subprocess.Popen([sys.executable, '-c', \"import time, os; time.sleep(0.3); os.write(1, b'z' * 20_000_000)\"])",
+				"print('x' * 40000)",
+			].join("\n"),
+		);
+		expect(cell.fullOutputPath).toBeDefined();
+		const saved = statSync(cell.fullOutputPath as string).size;
+		expect((await kernel.exec("late.wait()")).text).toBe("0");
+		expect(statSync(cell.fullOutputPath as string).size).toBe(saved);
+	});
+
+	it("keeps captures of running cells away from saved-output pruning", async () => {
+		const outputDir = temp();
+		const kernel = new PythonKernel({ python, cwd: temp(), outputDir });
+		kernels.push(kernel);
+		const running = kernel.exec("import time\nprint('started', flush=True)\ntime.sleep(0.6)\n'done'");
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(readdirSync(outputDir).filter((name) => statSync(join(outputDir, name)).isFile())).toEqual([]);
+		expect(readdirSync(join(outputDir, "active"))).toHaveLength(1);
+		expect((await running).text).toBe("started\n'done'");
+	});
+
+	it("bounds sh() capture and keeps valid UTF-8 intact", async () => {
+		const kernel = create();
 		const captured = await kernel.exec(
 			"r = sh(\"head -c 10000000 /dev/zero | tr '\\\\0' x\")\n(r.code, len(r.out) < 4_300_000, r.omitted, 'bytes omitted by sh()' in r.out)",
 		);
 		expect(captured.text).toBe("(0, True, 5805696, True)");
+		const euro = await kernel.exec(
+			"import shlex, sys\nr = sh(shlex.quote(sys.executable) + ' -c ' + shlex.quote(\"import sys; sys.stdout.write('€' * 800000)\"))\n(r.omitted, len(r.out), r.out.count('\\ufffd'))",
+		);
+		expect(euro.text).toBe("(0, 800000, 0)");
+		const cut = await kernel.exec(
+			"r = sh(shlex.quote(sys.executable) + ' -c ' + shlex.quote(\"import sys; sys.stdout.write('€' * 2000000)\"))\n(r.omitted > 0, r.out.count('\\ufffd'))",
+		);
+		expect(cut.text).toBe("(True, 0)");
 	});
 
 	it("bounds huge output to its start and end and keeps the full text across dispose", async () => {

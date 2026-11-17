@@ -16,8 +16,8 @@ const PYTHON_DESCRIPTION = [
 	"Persistent Python 3.15 kernel: variables survive across calls, so load data once and print only what you need; the last expression is shown.",
 	`Output keeps its start and end (~${MAX_OUTPUT_BYTES / 1024}KB); the rest is saved to a file.`,
 	"Lazy preloads: np, pd, pl, duckdb, yaml, httpx, Path, json, re.",
-	"sh(cmd) runs in the session directory and returns .code and .out; pip(*pkgs) installs into the shared kernel venv.",
-	"An interrupt or the 10-minute limit kills the kernel and the processes it started: variables are lost. Not a sandbox.",
+	"sh(cmd) runs in the kernel's directory (the session directory unless a cell changed it) and returns .code and .out; pip(*pkgs) installs into the shared kernel venv.",
+	"An interrupt or the 10-minute limit kills the kernel and its process group, as bash does: variables are lost. Not a sandbox.",
 ].join(" ");
 
 export function formatNamesNotice(names: string[]): string | undefined {
