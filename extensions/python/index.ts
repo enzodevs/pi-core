@@ -13,11 +13,11 @@ const MAX_NOTICE_NAME_CHARS = 64;
 const PREVIEW_LINES = 12;
 
 const PYTHON_DESCRIPTION = [
-	"Run Python 3.15 in a persistent kernel: variables, imports and functions stay alive across calls, so load data once, keep it in variables, and print only what you need. The last expression is shown, as in a REPL.",
-	`Output is bounded to its start and end (~${MAX_OUTPUT_BYTES / 1024}KB); longer output is saved to a file named in the result.`,
-	"Preloaded lazily (free until used): np, pd, pl, duckdb, yaml, httpx, Path, json, re, os, sys, subprocess, Counter, defaultdict.",
-	"The kernel follows the session directory (an os.chdir() holds until that directory changes). sh(cmd) runs a shell command there and returns .code and .out (stderr merged). pip(*pkgs) installs into the shared kernel environment (also visible to later sessions); run project code through the project's own environment via sh() instead.",
-	"An interrupt or the 10-minute cell limit stops the cell, every process it started and pending asyncio tasks, keeping variables; work that cannot be stopped within a few seconds resets the kernel instead. Use background_process for servers and long jobs. Not a sandbox: code runs with the user's permissions.",
+	"Persistent Python 3.15 kernel: variables survive across calls, so load data once and print only what you need; the last expression is shown.",
+	`Output keeps its start and end (~${MAX_OUTPUT_BYTES / 1024}KB); the rest is saved to a file.`,
+	"Lazy preloads: np, pd, pl, duckdb, yaml, httpx, Path, json, re.",
+	"sh(cmd) runs in the session directory and returns .code and .out; pip(*pkgs) installs into the shared kernel venv.",
+	"An interrupt or the 10-minute limit kills the kernel and the processes it started: variables are lost. Not a sandbox.",
 ].join(" ");
 
 export function formatNamesNotice(names: string[]): string | undefined {

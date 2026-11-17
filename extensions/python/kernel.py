@@ -4,17 +4,22 @@ Protocol (one JSON object per line):
   requests on stdin:   {"id": int, "op": "exec", "code": str, "output": path}
                        {"id": int, "op": "names"}
   replies on stdout:   {"ready": true, "python": str}  (once, at startup)
-                       {"id": int, "status": "ok" | "error" | "interrupted"}
+                       {"id": int, "status": "ok" | "error"}
                        {"id": int, "names": [str, ...]}
 
 Everything a cell writes to fd 1 or 2 -- print(), tracebacks, and child
 processes alike -- lands in that cell's output file, in order. The protocol
 uses private duplicates of the original stdin/stdout, so cell code can never
 corrupt it; between cells fd 0/1/2 point at /dev/null. Standard library only.
+
+Interrupts and timeouts are owned by the host: it kills the kernel together with
+every process it started and starts a fresh one. In-process cancellation cannot
+reliably stop threads, loop callbacks or code that swallows KeyboardInterrupt.
 """
 
 import ast
 import asyncio
+import collections
 import importlib
 import importlib.util
 import inspect
@@ -26,7 +31,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 import traceback
 
 KERNEL_FILE = os.path.abspath(__file__)
@@ -48,14 +52,19 @@ THIRD_PARTY_PRELUDE = {
 }
 
 
+SH_CAPTURE_BYTES = 4 * 1024 * 1024  # sh() keeps this much of the start and of the end
+CELL_SOURCE_BUDGET = 1024 * 1024  # characters of cell source kept for tracebacks
+
+
 class ShResult:
-    """Result of sh(): exit code and merged stdout+stderr."""
+    """Result of sh(): exit code, merged stdout+stderr, and bytes dropped from the middle."""
 
-    __slots__ = ("code", "out")
+    __slots__ = ("code", "out", "omitted")
 
-    def __init__(self, code, out):
+    def __init__(self, code, out, omitted=0):
         self.code = code
         self.out = out
+        self.omitted = omitted
 
     @property
     def ok(self):
@@ -66,20 +75,31 @@ class ShResult:
         return f"[exit {self.code}]\n{out}" if out else f"[exit {self.code}]"
 
 
-def sh(command, timeout=None, cwd=None):
-    """Run a shell command; return ShResult(code, out) with stderr merged into out."""
-    done = subprocess.run(
-        command,
-        shell=True,
-        cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=timeout,
-        text=True,
-        errors="replace",
+def sh(command, cwd=None):
+    """Run a shell command; return ShResult(code, out) with stderr merged into out.
+    Output beyond SH_CAPTURE_BYTES keeps its start and end, with an omission marker."""
+    half = SH_CAPTURE_BYTES // 2
+    head, tail, total = bytearray(), bytearray(), 0
+    proc = subprocess.Popen(
+        command, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
-    return ShResult(done.returncode, done.stdout)
+    with proc.stdout:
+        while chunk := proc.stdout.read1(65536):
+            total += len(chunk)
+            room = half - len(head)
+            if room > 0:
+                head += chunk[:room]
+                chunk = chunk[room:]
+            if chunk:
+                tail += chunk
+                if len(tail) > half:
+                    del tail[: len(tail) - half]
+    code = proc.wait()
+    omitted = total - len(head) - len(tail)
+    out = head.decode(errors="replace")
+    if omitted:
+        out += f"\n[... {omitted} bytes omitted by sh(); redirect to a file to keep everything ...]\n"
+    return ShResult(code, out + tail.decode(errors="replace"), omitted)
 
 
 def pip(*packages):
@@ -107,69 +127,14 @@ def pip(*packages):
     print(f"installed: {' '.join(packages)}")
 
 
-def process_group_members():
-    """Live (non-zombie) processes in the kernel's group, excluding the kernel and
-    the `ps` used to list them. None when the group cannot be listed."""
-    pgrp, me = os.getpgrp(), os.getpid()
-    try:
-        ps = subprocess.Popen(
-            ["ps", "-A", "-o", "pid=,pgid=,stat="],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        listing, _ = ps.communicate()
-    except OSError:
-        return None
-    members = set()
-    for line in listing.splitlines():
-        fields = line.split()
-        if len(fields) < 3 or fields[2].startswith("Z"):
-            continue
-        pid, pgid = int(fields[0]), int(fields[1])
-        if pgid == pgrp and pid not in (me, ps.pid):
-            members.add(pid)
-    return members
-
-
-def stop_process_group(term_grace=1.0, deadline_seconds=3.0):
-    """After an interrupt, make sure no child work keeps running (e.g. `cmd & wait`
-    background jobs ignore SIGINT). The whole group is re-listed on every round, so
-    processes started during cleanup are caught too: SIGTERM first, SIGKILL after
-    `term_grace`. Returns how many processes were signalled, or None if the group
-    could not be emptied (or listed) by the deadline. Only acts when the kernel
-    leads its own group."""
-    if os.getpgrp() != os.getpid():
-        return 0
-    start = time.monotonic()
-    signalled = set()
-    while True:
-        members = process_group_members()
-        if members is None:
-            return None
-        if not members:
-            return len(signalled)
-        elapsed = time.monotonic() - start
-        if elapsed > deadline_seconds:
-            return None
-        sig = signal.SIGTERM if elapsed < term_grace else signal.SIGKILL
-        for pid in members:
-            try:
-                os.kill(pid, sig)
-                signalled.add(pid)
-            except OSError:
-                pass
-        time.sleep(0.1)
-
-
 class Kernel:
     def __init__(self, proto_in, proto_out, devnull):
         self.proto_in = proto_in
         self.proto_out = proto_out
         self.devnull = devnull
         self.cell = 0
-        self.executing = False
+        self.sources = collections.OrderedDict()  # cell filename -> source length
+        self.source_chars = 0
         self.session_cwd = os.getcwd()
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
@@ -190,7 +155,6 @@ class Kernel:
         self.proto_out.flush()
 
     def serve(self):
-        signal.signal(signal.SIGINT, self.on_sigint)
         self.reply({"ready": True, "python": sys.version.split()[0]})
         for line in self.proto_in:
             request = json.loads(line)
@@ -212,11 +176,6 @@ class Kernel:
             return False
         self.session_cwd = cwd
         return True
-
-    def on_sigint(self, _signum, _frame):
-        # Interrupt only running cell code; an idle kernel ignores stray signals.
-        if self.executing:
-            raise KeyboardInterrupt
 
     def user_names(self):
         return sorted(name for name in self.ns if name not in self.baseline and not name.startswith("_"))
@@ -242,8 +201,7 @@ class Kernel:
     def run_cell(self, code):
         self.cell += 1
         filename = f"<cell {self.cell}>"
-        # Register the source so tracebacks show the offending lines.
-        linecache.cache[filename] = (len(code), None, code.splitlines(True), filename)
+        self.remember_source(filename, code)
         flags = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
         try:
             tree = compile(code, filename, "exec", flags=ast.PyCF_ONLY_AST | flags)
@@ -256,7 +214,6 @@ class Kernel:
         except SyntaxError:
             traceback.print_exc(limit=0)
             return "error"
-        self.executing = True
         try:
             value = None
             for part in parts:
@@ -265,64 +222,44 @@ class Kernel:
                     value = self.loop.run_until_complete(value)
             if last is not None and value is not None:
                 self.ns["_"] = value
-                print(repr(value))  # still interruptible: a slow repr must not cost the kernel
+                print(repr(value))
             return "ok"
-        except KeyboardInterrupt:
-            self.executing = False
-            # Async cleanup first: it may start processes, which the group sweep then catches.
-            cancelled = self.cancel_pending_tasks()
-            stopped = stop_process_group()
-            # Work that survives cancellation would run during later cells: give up the kernel.
-            if cancelled is None:
-                self.reset_after_interrupt("asyncio tasks ignored cancellation")
-            if stopped is None:
-                self.reset_after_interrupt("child processes could not be stopped")
-            notes = [f"{stopped} child process(es) stopped"] if stopped else []
-            if cancelled:
-                notes.append(f"{cancelled} pending asyncio task(s) cancelled")
-            detail = " (" + ", ".join(notes) + ")" if notes else ""
-            print(f"KeyboardInterrupt{detail}", file=sys.stderr)
-            return "interrupted"
         except SystemExit as error:
             print(f"SystemExit({error.code!r}) ignored: the kernel keeps running", file=sys.stderr)
             return "error"
         except BaseException as error:
             self.print_user_traceback(error)
             return "error"
-        finally:
-            self.executing = False
 
-    def reset_after_interrupt(self, reason):
-        """Exit; the host reports lost state, and its group kill stops anything left."""
-        print(f"KeyboardInterrupt: {reason}; resetting the kernel", file=sys.stderr)
-        sys.stderr.flush()
-        os._exit(70)
-
-    def cancel_pending_tasks(self, deadline_seconds=2.0):
-        """An interrupted cell must not resume later. Cancel every pending task, including
-        tasks spawned during cleanup, until none remain. Returns the number cancelled, or
-        None if some task still runs at the deadline."""
-        cancelled = 0
-        deadline = time.monotonic() + deadline_seconds
-        while pending := [task for task in asyncio.all_tasks(self.loop) if not task.done()]:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return None
-            for task in pending:
-                if not task.cancelling():
-                    task.cancel()
-                    cancelled += 1
-            try:
-                self.loop.run_until_complete(asyncio.wait(pending, timeout=remaining))
-            except BaseException:
-                pass
-        return cancelled
+    def remember_source(self, filename, code):
+        """Register a cell's source so tracebacks show its lines, within a budget:
+        the oldest cells lose their source lines first (line numbers remain)."""
+        linecache.cache[filename] = (len(code), None, code.splitlines(True), filename)
+        self.sources[filename] = len(code)
+        self.source_chars += len(code)
+        while self.source_chars > CELL_SOURCE_BUDGET and len(self.sources) > 1:
+            old, size = self.sources.popitem(last=False)
+            linecache.cache.pop(old, None)
+            self.source_chars -= size
 
     def print_user_traceback(self, error):
         tb = error.__traceback__
         while tb is not None and tb.tb_frame.f_code.co_filename == KERNEL_FILE:
             tb = tb.tb_next
         traceback.print_exception(type(error), error, tb)
+
+
+def become_subreaper():
+    """Linux: adopt orphaned descendants (double-forked daemons, setsid children whose
+    parent exited), so the host can still find and stop them through the kernel."""
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        import ctypes
+
+        ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+    except (OSError, AttributeError):
+        pass
 
 
 def main():
@@ -341,6 +278,7 @@ def main():
     sys.stderr = io.TextIOWrapper(
         io.FileIO(2, "w", closefd=False), encoding="utf-8", errors="backslashreplace", write_through=True
     )
+    become_subreaper()
     try:
         Kernel(proto_in, proto_out, devnull).serve()
     finally:

@@ -1,7 +1,8 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readdir, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { existsSync, type FSWatcher, watch } from "node:fs";
+import { mkdir, open, readdir, rm, stat, truncate } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { formatSize } from "@earendil-works/pi-coding-agent";
@@ -13,8 +14,11 @@ const HEAD_LINES = 150;
 const TAIL_LINES = 450;
 const CELL_TIMEOUT_MS = 10 * 60_000;
 const READY_TIMEOUT_MS = 30_000;
-const INTERRUPT_GRACE_MS = 3_000;
 const OUTPUT_RETENTION_MS = 7 * 24 * 60 * 60_000;
+/** A cell writing more than this is stopped; the saved file keeps this much. */
+const MAX_CAPTURE_BYTES = 64 * 1024 * 1024;
+/** Saved full outputs beyond this total are pruned, oldest first. */
+const MAX_SAVED_OUTPUT_BYTES = 256 * 1024 * 1024;
 
 export type CellStatus = "ok" | "error" | "interrupted" | "timeout" | "crashed";
 
@@ -29,6 +33,7 @@ export interface CellResult {
 
 export interface KernelOptions {
 	python: string;
+	/** Default directory for a new kernel when a cell names none. */
 	cwd: string;
 	/** Truncated outputs are kept here (pruned after 7 days) so their paths stay valid across reloads. */
 	outputDir: string;
@@ -83,59 +88,85 @@ export class PythonKernel {
 
 	private async execNow(code: string, cwd: string | undefined, signal?: AbortSignal): Promise<CellResult> {
 		if (this.disposed) throw new Error("python kernel is shut down");
+		if (signal?.aborted) return { status: "interrupted", text: "[cancelled before running]", totalBytes: 0 };
+		const directory = cwd ?? this.options.cwd;
+		if (!existsSync(directory))
+			return {
+				status: "error",
+				text: `Session directory unavailable: ${directory}; the cell was not run.`,
+				totalBytes: 0,
+			};
 		let header: string | undefined;
 		if (!this.proc) {
 			if (this.lostState) header = "[new kernel: variables from the previous kernel are gone]";
 			this.lostState = false;
 			await this.prepareOutputDir();
-			await this.start();
+			await this.start(directory);
 		}
-		if (signal?.aborted) return { status: "interrupted", text: "[cancelled before running]", totalBytes: 0 };
 		const outputPath = join(this.options.outputDir, `${this.id}-${++this.cells}.txt`);
 		const timeoutMs = this.options.cellTimeoutMs ?? CELL_TIMEOUT_MS;
-		let timedOut = false;
-		let escalation: NodeJS.Timeout | undefined;
-		const interrupt = () => {
-			// The whole process group, so shell commands the cell started stop too.
-			this.signalGroup("SIGINT");
-			// A cell stuck in C code may ignore SIGINT: then kill the kernel (state is lost).
-			escalation ??= setTimeout(() => this.kill(), INTERRUPT_GRACE_MS);
+		let stopped: "interrupted" | "timeout" | "overflow" | undefined;
+		// The host owns cancellation: it never trusts the cell to stop itself.
+		const stop = (reason: NonNullable<typeof stopped>) => {
+			stopped ??= reason;
+			this.kill();
 		};
-		signal?.addEventListener("abort", interrupt, { once: true });
-		const timer = setTimeout(() => {
-			timedOut = true;
-			interrupt();
-		}, timeoutMs);
+		const onAbort = () => stop("interrupted");
+		signal?.addEventListener("abort", onAbort, { once: true });
+		const timer = setTimeout(() => stop("timeout"), timeoutMs);
+		const watcher = watchCapture(outputPath, () => stop("overflow"));
 		let reply: Reply | undefined;
 		try {
-			reply = await this.request({ op: "exec", code, output: outputPath, cwd });
+			reply = await this.request({ op: "exec", code, output: outputPath, cwd: directory });
 		} finally {
 			clearTimeout(timer);
-			clearTimeout(escalation);
-			signal?.removeEventListener("abort", interrupt);
+			watcher?.close();
+			signal?.removeEventListener("abort", onAbort);
 		}
 		const notes: string[] = [];
 		let status: CellStatus;
-		if (!reply) {
+		const reset = "the kernel and every process it started were stopped; variables are gone";
+		if (stopped === "interrupted") {
+			status = "interrupted";
+			notes.push(`[interrupted: ${reset}]`);
+		} else if (stopped === "timeout") {
+			status = "timeout";
+			notes.push(
+				`[stopped after ${Math.round(timeoutMs / 1000)}s: ${reset}. Use background_process for long jobs]`,
+			);
+		} else if (stopped === "overflow") {
+			status = "error";
+			await truncate(outputPath, MAX_CAPTURE_BYTES).catch(() => undefined);
+			notes.push(
+				`[stopped: output exceeded ${formatSize(MAX_CAPTURE_BYTES)}; ${reset}. Write large data to a file and print a summary]`,
+			);
+		} else if (!reply) {
 			status = "crashed";
 			const stderr = this.stderrTail.trim().split("\n").at(-1);
 			notes.push(
 				`[kernel died${stderr ? `: ${stderr}` : ""}; variables are lost and the next call starts a fresh kernel]`,
 			);
 			this.lostState = true;
-		} else if (reply.status === "interrupted") {
-			status = timedOut ? "timeout" : "interrupted";
-			notes.push(
-				timedOut
-					? `[interrupted after ${Math.round(timeoutMs / 1000)}s; kernel state kept. Use background_process for long jobs]`
-					: "[interrupted; kernel state kept]",
-			);
 		} else {
 			status = reply.status === "ok" ? "ok" : "error";
 		}
+		if (!stopped) {
+			// A fast cell can finish before the watcher reacts: bound the saved file anyway.
+			const size = (await stat(outputPath).catch(() => undefined))?.size ?? 0;
+			if (size > MAX_CAPTURE_BYTES) {
+				stopped = "overflow";
+				await truncate(outputPath, MAX_CAPTURE_BYTES).catch(() => undefined);
+				notes.push(`[output exceeded ${formatSize(MAX_CAPTURE_BYTES)}; only its start was saved]`);
+			}
+		}
 		const output = await readOutput(outputPath);
 		if (output.truncated) {
-			notes.unshift(`[output truncated: ${formatSize(output.totalBytes)} total; full output: ${outputPath}]`);
+			notes.unshift(
+				stopped === "overflow"
+					? `[output truncated; its first ${formatSize(MAX_CAPTURE_BYTES)} are saved in ${outputPath}]`
+					: `[output truncated: ${formatSize(output.totalBytes)} total; full output: ${outputPath}]`,
+			);
+			await pruneSavedOutputs(this.options.outputDir, outputPath);
 		} else {
 			await rm(outputPath, { force: true });
 		}
@@ -161,9 +192,9 @@ export class PythonKernel {
 		}
 	}
 
-	private start(): Promise<void> {
+	private start(cwd: string): Promise<void> {
 		const proc = spawn(this.options.python, ["-I", this.options.kernelPath ?? KERNEL_PATH], {
-			cwd: this.options.cwd,
+			cwd,
 			env: this.options.env ?? process.env,
 			stdio: ["pipe", "pipe", "pipe"],
 			detached: true, // own process group: interrupts and kills reach the cell's children
@@ -206,11 +237,7 @@ export class PythonKernel {
 			if (this.proc !== proc) return;
 			clearTimeout(readyTimer);
 			// The group outlives a crashed leader (os._exit, native crash): stop what it left running.
-			if (proc.pid) {
-				try {
-					process.kill(-proc.pid, "SIGKILL");
-				} catch {}
-			}
+			if (proc.pid) killProcessTree(proc.pid);
 			this.proc = undefined;
 			this.lostState = !this.disposed;
 			const stderr = this.stderrTail.trim();
@@ -249,22 +276,108 @@ export class PythonKernel {
 		});
 	}
 
-	private signalGroup(signal: NodeJS.Signals): void {
-		const pid = this.proc?.pid;
-		if (!pid) return;
-		try {
-			process.kill(-pid, signal);
-		} catch {
-			this.proc?.kill(signal);
-		}
-	}
-
+	/** Stop the kernel and everything it started; waiting cells resolve as gone. */
 	private kill(): void {
+		const pid = this.proc?.pid;
 		if (!this.proc) return;
-		this.signalGroup("SIGKILL");
 		this.proc = undefined;
+		if (pid) killProcessTree(pid);
 		for (const waiter of this.waiters.values()) waiter(undefined);
 		this.waiters.clear();
+	}
+}
+
+/**
+ * SIGKILL a kernel, its process group, and every descendant, including children that
+ * left the group with setsid. The group is frozen first so nothing forks mid-sweep;
+ * the kernel is a Linux subreaper, so orphaned descendants are still found under it.
+ */
+function killProcessTree(root: number): void {
+	const send = (pid: number, signal: NodeJS.Signals) => {
+		try {
+			process.kill(pid, signal);
+		} catch {}
+	};
+	send(-root, "SIGSTOP");
+	let found = new Set<number>();
+	for (let round = 0; round < 3; round++) {
+		const next = descendants(root);
+		for (const pid of next) send(pid, "SIGSTOP");
+		if ([...next].every((pid) => found.has(pid))) break;
+		found = new Set([...found, ...next]);
+	}
+	for (const pid of found) send(pid, "SIGKILL");
+	send(-root, "SIGKILL");
+	send(root, "SIGKILL");
+}
+
+/** Processes in `root`'s group plus all their descendants, from one `ps` snapshot. */
+function descendants(root: number): Set<number> {
+	let listing: string;
+	try {
+		listing = execFileSync("ps", ["-A", "-o", "pid=,ppid=,pgid="], { encoding: "utf8", timeout: 5_000 });
+	} catch {
+		return new Set();
+	}
+	const children = new Map<number, number[]>();
+	const found = new Set<number>();
+	for (const line of listing.split("\n")) {
+		const [pid, ppid, pgid] = line.trim().split(/\s+/).map(Number);
+		if (!pid || ppid === undefined) continue;
+		children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+		if (pgid === root && pid !== root) found.add(pid);
+	}
+	const queue = [root, ...found];
+	while (queue.length > 0) {
+		for (const child of children.get(queue.pop() as number) ?? []) {
+			if (found.has(child)) continue;
+			found.add(child);
+			queue.push(child);
+		}
+	}
+	return found;
+}
+
+/** Call `onOverflow` once the cell's capture file passes MAX_CAPTURE_BYTES. */
+function watchCapture(path: string, onOverflow: () => void): FSWatcher | undefined {
+	let fired = false;
+	const check = () => {
+		if (fired) return;
+		stat(path)
+			.then((info) => {
+				if (info.size > MAX_CAPTURE_BYTES && !fired) {
+					fired = true;
+					onOverflow();
+				}
+			})
+			.catch(() => undefined);
+	};
+	try {
+		// The kernel creates the file when the cell starts; watch its directory for writes.
+		const watcher = watch(dirname(path), (_event, name) => {
+			if (name === basename(path)) check();
+		});
+		watcher.on("error", () => undefined);
+		return watcher;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Keep saved full outputs under MAX_SAVED_OUTPUT_BYTES, deleting the oldest first. */
+async function pruneSavedOutputs(directory: string, keep: string): Promise<void> {
+	const files = [];
+	for (const name of await readdir(directory).catch(() => [])) {
+		const path = join(directory, name);
+		const info = await stat(path).catch(() => undefined);
+		if (info?.isFile()) files.push({ path, size: info.size, mtime: info.mtimeMs });
+	}
+	let total = files.reduce((sum, file) => sum + file.size, 0);
+	for (const file of files.sort((a, b) => a.mtime - b.mtime)) {
+		if (total <= MAX_SAVED_OUTPUT_BYTES) break;
+		if (file.path === keep) continue;
+		await rm(file.path, { force: true });
+		total -= file.size;
 	}
 }
 

@@ -77,136 +77,100 @@ describe.skipIf(!available)("python kernel", () => {
 		expect(await kernel.exec("'still here'")).toMatchObject({ status: "ok", text: "'still here'" });
 	});
 
-	it("interrupts a running cell on abort and keeps earlier state", async () => {
+	// Interrupted work writes pid files to the cell directory: variables die with the kernel.
+	const pidFrom = async (dir: string, name: string) =>
+		Number((await readFile(join(dir, name), "utf8").catch(() => "0")).trim());
+	const abortAfter = (ms: number) => {
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), ms);
+		return controller.signal;
+	};
+
+	it("resets the kernel on abort and says that variables are gone", async () => {
 		const kernel = create();
 		await kernel.exec("kept = 'yes'");
-		const controller = new AbortController();
-		const running = kernel.exec("while True:\n    pass", undefined, controller.signal);
-		setTimeout(() => controller.abort(), 200);
-		const result = await running;
+		const result = await kernel.exec("while True:\n    pass", undefined, abortAfter(200));
 		expect(result.status).toBe("interrupted");
-		expect(result.text).toContain("[interrupted; kernel state kept]");
-		expect(await kernel.exec("kept")).toMatchObject({ status: "ok", text: "'yes'" });
+		expect(result.text).toContain("variables are gone");
+		const next = await kernel.exec("'kept' in globals()");
+		expect(next).toMatchObject({ status: "ok", text: "False" });
 	});
 
-	it("stops the cell's child processes on interrupt and on dispose", async () => {
+	it("stops work even when the cell swallows KeyboardInterrupt or keeps threads and callbacks", async () => {
+		const dir = temp();
 		const kernel = create(400);
-		const timedOut = await kernel.exec(
-			"import subprocess\nchild = subprocess.Popen(['sleep', '30'])\nchild_pid = child.pid\nchild.wait()",
+		const swallowed = await kernel.exec(
+			[
+				"import subprocess, time",
+				"child = subprocess.Popen(['sh', '-c', 'trap \"\" INT TERM; exec sleep 30'])",
+				"open('child.pid', 'w').write(str(child.pid))",
+				"try:",
+				"    time.sleep(10)",
+				"except KeyboardInterrupt:",
+				"    pass",
+			].join("\n"),
+			dir,
 		);
-		expect(timedOut.status).toBe("timeout");
-		const waited = Number((await kernel.exec("child_pid")).text);
-		expect(await eventually(() => !alive(waited))).toBe(true);
+		expect(swallowed.status).toBe("timeout");
+		const child = await pidFrom(dir, "child.pid");
+		expect(child).toBeGreaterThan(0);
+		expect(await eventually(() => !alive(child))).toBe(true);
 
-		const background = Number((await kernel.exec("subprocess.Popen(['sleep', '30']).pid")).text);
-		expect(alive(background)).toBe(true);
-		kernel.dispose();
-		expect(await eventually(() => !alive(background))).toBe(true);
+		const late = await kernel.exec(
+			[
+				"import asyncio, time",
+				"def work():",
+				"    time.sleep(0.6)",
+				"    open('thread-ran', 'w').close()",
+				"async def main():",
+				"    asyncio.get_running_loop().call_later(0.6, lambda: open('callback-ran', 'w').close())",
+				"    await asyncio.to_thread(work)",
+				"await main()",
+			].join("\n"),
+			dir,
+		);
+		expect(late.status).toBe("timeout");
+		await new Promise((resolve) => setTimeout(resolve, 900));
+		expect(existsSync(join(dir, "thread-ran"))).toBe(false);
+		expect(existsSync(join(dir, "callback-ran"))).toBe(false);
 	});
 
-	it("stops background shell jobs that ignore SIGINT and children left by a crashed kernel", async () => {
-		const kernel = create(500);
-		const interrupted = await kernel.exec(
-			"import os\nopen('job.pid', 'w').close()\nsh('sleep 30 & echo $! > job.pid; wait')",
+	it("stops detached, daemonized and shell-background descendants on timeout", async () => {
+		const dir = temp();
+		const kernel = create(800);
+		const result = await kernel.exec(
+			[
+				"import subprocess, time",
+				"session = subprocess.Popen(['sleep', '30'], start_new_session=True)",
+				"open('session.pid', 'w').write(str(session.pid))",
+				// Double fork: the daemon's parent exits at once, so only the subreaper still links it.
+				"subprocess.run(['sh', '-c', 'setsid sh -c \"sleep 30 & echo \\$! > daemon.pid\" &'])",
+				"sh('sleep 30 & echo $! > job.pid; wait')",
+			].join("\n"),
+			dir,
 		);
-		expect(interrupted.status).toBe("timeout");
-		expect(interrupted.text).toMatch(/child process\(es\) stopped/);
-		const job = Number((await kernel.exec("open('job.pid').read().strip()")).text.replaceAll("'", ""));
-		expect(job).toBeGreaterThan(0);
-		expect(await eventually(() => !alive(job))).toBe(true);
+		expect(result.status).toBe("timeout");
+		for (const name of ["session.pid", "daemon.pid", "job.pid"]) {
+			const pid = await pidFrom(dir, name);
+			expect(pid, name).toBeGreaterThan(0);
+			expect(await eventually(() => !alive(pid)), name).toBe(true);
+		}
+	});
 
+	it("stops the kernel's children on dispose and after a crash", async () => {
+		const kernel = create();
 		const orphan = Number(
 			(await kernel.exec("import subprocess\nsubprocess.Popen(['sleep', '30']).pid")).text,
 		);
-		expect((await kernel.exec("os._exit(1)")).status).toBe("crashed");
+		expect((await kernel.exec("import os\nos._exit(1)")).status).toBe("crashed");
 		expect(await eventually(() => !alive(orphan))).toBe(true);
-	});
 
-	it("catches processes started during cleanup and counts only real children", async () => {
-		const kernel = create();
-		const fromFinally = new AbortController();
-		setTimeout(() => fromFinally.abort(), 300);
-		const cleanup = await kernel.exec(
-			[
-				"import asyncio, subprocess",
-				"late = []",
-				"async def main():",
-				"    try:",
-				"        await asyncio.sleep(10)",
-				"    finally:",
-				"        late.append(subprocess.Popen(['sleep', '30']).pid)",
-				"await main()",
-			].join("\n"),
-			undefined,
-			fromFinally.signal,
-		);
-		expect(cleanup.status).toBe("interrupted");
-		const late = Number((await kernel.exec("late[0]")).text);
-		expect(await eventually(() => !alive(late))).toBe(true);
-
-		const respawning = new AbortController();
-		setTimeout(() => respawning.abort(), 400);
-		const respawned = await kernel.exec(
-			// Popen().wait() does not kill its child on interrupt (subprocess.run would), so the
-			// TERM trap really runs and starts a replacement mid-cleanup.
-			"subprocess.Popen(['sh', '-c', \"trap 'sleep 30 & echo $! > replacement.pid; exit 0' TERM; trap '' INT; while true; do sleep 0.1; done\"]).wait()",
-			undefined,
-			respawning.signal,
-		);
-		expect(respawned.status).toBe("interrupted");
-		const replacement = Number(
-			(await kernel.exec("open('replacement.pid').read().strip()")).text.replaceAll("'", ""),
-		);
-		expect(replacement).toBeGreaterThan(0);
-		expect(await eventually(() => !alive(replacement))).toBe(true);
-
-		const asyncOnly = new AbortController();
-		setTimeout(() => asyncOnly.abort(), 200);
-		const quiet = await kernel.exec("await asyncio.sleep(10)", undefined, asyncOnly.signal);
-		expect(quiet.text).not.toContain("child process");
-	});
-
-	it("resets the kernel when asyncio work refuses cancellation, and cancels tasks spawned during cleanup", async () => {
-		const kernel = create();
-		const spawned = new AbortController();
-		setTimeout(() => spawned.abort(), 300);
-		const cleaned = await kernel.exec(
-			[
-				"import asyncio",
-				"hits = []",
-				"async def later():",
-				"    await asyncio.sleep(0.5)",
-				"    hits.append('spawned task resumed')",
-				"async def main():",
-				"    try:",
-				"        await asyncio.sleep(10)",
-				"    finally:",
-				"        asyncio.get_running_loop().create_task(later())",
-				"await main()",
-			].join("\n"),
-			undefined,
-			spawned.signal,
-		);
-		expect(cleaned.status).toBe("interrupted");
-		expect(await kernel.exec("await asyncio.sleep(0.8)\nhits")).toMatchObject({ status: "ok", text: "[]" });
-
-		const stubborn = new AbortController();
-		setTimeout(() => stubborn.abort(), 300);
-		const reset = await kernel.exec(
-			[
-				"async def stubborn():",
-				"    try:",
-				"        await asyncio.sleep(10)",
-				"    except asyncio.CancelledError:",
-				"        await asyncio.sleep(5)",
-				"await stubborn()",
-			].join("\n"),
-			undefined,
-			stubborn.signal,
-		);
-		expect(reset.status).toBe("crashed");
-		expect(reset.text).toContain("asyncio tasks ignored cancellation; resetting the kernel");
-		expect((await kernel.exec("'hits' in globals()")).text).toContain("[new kernel");
+		const restarted = await kernel.exec("import subprocess\nsubprocess.Popen(['sleep', '30']).pid");
+		expect(restarted.text).toContain("[new kernel: variables from the previous kernel are gone]");
+		const background = Number(restarted.text.split("\n").at(-1));
+		expect(alive(background)).toBe(true);
+		kernel.dispose();
+		expect(await eventually(() => !alive(background))).toBe(true);
 	});
 
 	it("fails the cell instead of running in the wrong directory when the session directory is gone", async () => {
@@ -218,28 +182,51 @@ describe.skipIf(!available)("python kernel", () => {
 		expect((await kernel.exec("import os\nos.path.exists('should-not-exist')")).text).toBe("False");
 	});
 
-	it("cancels pending asyncio work so an interrupted cell never resumes later", async () => {
-		const kernel = create();
-		const controller = new AbortController();
-		setTimeout(() => controller.abort(), 300);
-		const interrupted = await kernel.exec(
-			"import asyncio\nhits = []\nasync def late():\n    await asyncio.sleep(0.6)\n    hits.append('resumed')\nawait late()",
-			undefined,
-			controller.signal,
-		);
-		expect(interrupted.status).toBe("interrupted");
-		expect(interrupted.text).toContain("pending asyncio task(s) cancelled");
-		expect(await kernel.exec("await asyncio.sleep(0.8)\nhits")).toMatchObject({ status: "ok", text: "[]" });
+	it("restarts in the current session directory after the original one is removed", async () => {
+		const original = temp();
+		const moved = temp();
+		const kernel = new PythonKernel({ python, cwd: original, outputDir: temp() });
+		kernels.push(kernel);
+		await kernel.exec("1", original);
+		await kernel.exec("1", moved);
+		rmSync(original, { recursive: true, force: true });
+		expect((await kernel.exec("import os\nos._exit(1)", moved)).status).toBe("crashed");
+		const fresh = await kernel.exec("import os\nos.getcwd()", moved);
+		expect(fresh.status).toBe("ok");
+		expect(fresh.text).toContain(moved);
 	});
 
-	it("keeps a slow result repr interruptible instead of killing the kernel", async () => {
-		const kernel = create(300);
-		await kernel.exec(
-			"import time\nclass Slow:\n    def __repr__(self):\n        time.sleep(30)\n        return 'slow'",
+	it("keeps a bounded amount of old cell source", async () => {
+		const kernel = create();
+		const comment = `# ${"x".repeat(600_000)}\n`;
+		for (let cell = 0; cell < 4; cell++) await kernel.exec(`${comment}value = ${cell}`);
+		const kept = await kernel.exec(
+			"import linecache\nsum(len(''.join(entry[2])) for name, entry in linecache.cache.items() if name.startswith('<cell'))",
 		);
-		await kernel.exec("kept = 1");
-		expect((await kernel.exec("Slow()")).status).toBe("timeout");
-		expect(await kernel.exec("kept")).toMatchObject({ status: "ok", text: "1" });
+		expect(Number(kept.text)).toBeLessThan(1_300_000);
+		const failed = await kernel.exec("raise ValueError('still shows source')");
+		expect(failed.text).toContain("raise ValueError");
+	});
+
+	it("stops a cell whose output exceeds the capture limit, and bounds sh() capture", async () => {
+		const kernel = create();
+		// A cell that finishes before the watcher reacts still gets a bounded saved file.
+		const burst = await kernel.exec(
+			"import os\nchunk = b'x' * 1048576\nfor _ in range(80):\n    os.write(1, chunk)",
+		);
+		expect(burst.text).toMatch(/output exceeded 64\.0MB/);
+		const flood = await kernel.exec("import os\nchunk = b'x' * 1048576\nwhile True:\n    os.write(1, chunk)");
+		expect(flood.status).toBe("error");
+		expect(flood.text).toMatch(/output exceeded 64\.0MB/);
+		expect(flood.text).toContain("variables are gone");
+		expect(flood.fullOutputPath).toBeDefined();
+		const { size } = await import("node:fs/promises").then((fs) => fs.stat(flood.fullOutputPath as string));
+		expect(size).toBeLessThanOrEqual(64 * 1024 * 1024);
+
+		const captured = await kernel.exec(
+			"r = sh(\"head -c 10000000 /dev/zero | tr '\\\\0' x\")\n(r.code, len(r.out) < 4_300_000, r.omitted, 'bytes omitted by sh()' in r.out)",
+		);
+		expect(captured.text).toBe("(0, True, 5805696, True)");
 	});
 
 	it("bounds huge output to its start and end and keeps the full text across dispose", async () => {
