@@ -1,0 +1,8 @@
+# Preloaded lazily by kernel.py: zero cost until a cell uses them.
+# Regenerate requirements.txt with: npm run python:lock
+numpy
+pandas
+polars
+duckdb
+pyyaml
+httpx

@@ -52,6 +52,7 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Context hygiene** — bounded tool outputs and targeted retrieval without lossy rewriting of historical evidence.
 - **Optional JSON compaction** — a local, lossless-only Headroom pilot, disabled by default, with exact original-file recovery.
 - **Observable background subagents** — run real interactive Pi TUI children in isolated Herdr tabs or tmux panes, with bounded sidecar delivery and a portable RPC fallback.
+- **Persistent Python kernel** — an opt-in `python` tool on Python 3.15 whose variables and helpers survive between calls and compaction, with bounded output.
 - **Bounded background processes** — watch finite CI gates or run persistent services with rotating searchable logs and direct TUI control.
 - **Deferred session scheduler** — persist one-shot, interval, and cron jobs; run shell checks without model calls and wake the agent only when needed. [Behavior and limits](extensions/scheduler/README.md).
 - **Interactive questions** — ask for bounded free text, one choice, or multiple choices without guessing.
@@ -133,6 +134,20 @@ From this source checkout, run `make headroom-install` (requires `uv` and Python
 Only large, complete JSON bash results with supported tabular shapes are compacted. Every rendered cell is checked, original JSON is saved privately with a recovery path, and failures leave results unchanged. File tools, failed commands, instructions, and historical messages are not rewritten. This optional Python worker does not add a Python requirement to the rest of Pi Core.
 
 See [scope, storage, regression tests, and limitations](docs/headroom-json.md). RTK and ICM are not integrated.
+
+## Persistent Python kernel (opt-in)
+
+From this source checkout, run `make python-install` (requires `uv`). It installs Python 3.15 and a hash-locked kernel venv under `~/.pi/agent/pi-core/python/` (numpy, pandas, polars, duckdb, pyyaml, httpx). After a restart or `/reload`, Pi gets one `python` tool; without the runtime, the extension adds nothing.
+
+- One persistent namespace per Pi session: variables, imports and functions survive between calls and compaction (the model is told which names are still defined). `/python-reset` starts clean; a dead kernel is restarted on the next call with an explicit "state lost" note.
+- The prelude uses Python 3.15 lazy imports, so `np`, `pd`, `pl`, `duckdb`, `Path`, `json`, … cost nothing until used (idle kernel ≈ 21 MB).
+- The kernel follows the session directory set by `session-cwd`; an explicit `os.chdir()` holds until that directory changes, and an unavailable directory fails the cell instead of running elsewhere.
+- `sh(cmd)` runs a shell command and returns `.code`/`.out`. `pip(*pkgs)` installs into the **shared** kernel venv (visible to later sessions), with `uv --exclude-newer "7 days"` as a guard against freshly published malicious releases.
+- Python and child-process output is captured in order. The model sees the start and end (~30 KB); longer output is kept under `~/.pi/agent/pi-core/python/outputs/` (pruned after 7 days) and its path is named in the result.
+- Esc or the 10-minute cell limit interrupts the cell, stops every process in the kernel's process group (SIGTERM, then SIGKILL) and cancels pending asyncio tasks (including processes and tasks started during that cleanup) while keeping variables. If async work refuses cancellation within 2 s, or processes survive a 3 s SIGTERM→SIGKILL sweep, the kernel resets with an explicit "state lost" note. Run servers and long jobs with `background_process`.
+- It is not a sandbox: code runs with your permissions, like `bash`.
+
+`make python-install` re-syncs the venv to the lock (removing packages the model added with `pip()`); `npm run python:lock` refreshes the lock.
 
 ### Nested project guides (opt-in)
 

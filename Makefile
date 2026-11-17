@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install format format-check typecheck test fallow health check pack compat-latest compat-package clean headroom-install headroom-test translate-install translate-test review-skill-check
+.PHONY: help install format format-check typecheck test fallow health check pack compat-latest compat-package clean headroom-install headroom-test python-install translate-install translate-test review-skill-check
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -31,6 +31,9 @@ headroom-install: ## Install the optional pinned JSON-only Headroom runtime (req
 
 headroom-test: ## Run the optional real Headroom regression suite
 	npm run headroom:test
+
+python-install: ## Install the optional Python 3.15 kernel runtime for the python tool (requires uv)
+	npm run python:install
 
 translate-install: ## Download and verify the optional local TranslateGemma model
 	npm run translate:install

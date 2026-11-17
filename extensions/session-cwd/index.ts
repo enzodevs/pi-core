@@ -28,6 +28,22 @@ function displayPath(path: string, original: string): string {
 	return rel === "" ? "." : rel.startsWith("..") || isAbsolute(rel) ? path : `./${rel}`;
 }
 
+/** The working directory this extension last stored on the current branch, or ctx.cwd. */
+export function storedCwdState(ctx: Pick<ExtensionContext, "cwd" | "sessionManager">): CwdState {
+	let state: CwdState = { current: ctx.cwd, stack: [] };
+	for (const entry of ctx.sessionManager.getBranch()) {
+		if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
+		const stored = entry.data as Partial<StoredState>;
+		if (stored.original === ctx.cwd && typeof stored.current === "string" && Array.isArray(stored.stack)) {
+			state = {
+				current: stored.current,
+				stack: stored.stack.filter((path): path is string => typeof path === "string"),
+			};
+		}
+	}
+	return state;
+}
+
 async function directory(path: string): Promise<string> {
 	const absolute = resolve(path);
 	if (!(await stat(absolute)).isDirectory()) throw new Error(`Not a directory: ${absolute}`);
@@ -160,17 +176,7 @@ export default function sessionCwd(pi: ExtensionAPI): void {
 
 	pi.on("session_start", (_event, ctx) => {
 		original = ctx.cwd;
-		state = { current: original, stack: [] };
-		for (const entry of ctx.sessionManager.getBranch()) {
-			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
-			const stored = entry.data as Partial<StoredState>;
-			if (stored.original === original && typeof stored.current === "string" && Array.isArray(stored.stack)) {
-				state = {
-					current: stored.current,
-					stack: stored.stack.filter((path): path is string => typeof path === "string"),
-				};
-			}
-		}
+		state = storedCwdState(ctx);
 		updateStatus(ctx);
 	});
 

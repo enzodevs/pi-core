@@ -50,7 +50,8 @@
 			"./extensions/ask-user-question/index.ts",
 			"./extensions/subagent/index.ts",
 			"./extensions/context-inspector/index.ts",
-			"./extensions/whatsapp/index.ts"
+			"./extensions/whatsapp/index.ts",
+			"./extensions/python/index.ts"
 		]
 	},
 	"scripts": {
@@ -61,6 +62,8 @@
 		"benchmark:fast": "node extensions/fast-mode/benchmark.mjs",
 		"headroom:install": "node extensions/json-headroom/setup.mjs",
 		"headroom:test": "node extensions/json-headroom/check.mjs",
+		"python:install": "node extensions/python/setup.mjs",
+		"python:lock": "uv pip compile extensions/python/requirements.in --universal --python-version 3.15 --generate-hashes --exclude-newer \"7 days\" --output-file extensions/python/requirements.txt",
 		"translate:install": "node extensions/translate/setup.mjs",
 		"translate:test": "node extensions/translate/check.mjs",
 		"fallow": "fallow dead-code --no-cache --fail-on-issues --format compact --quiet",
