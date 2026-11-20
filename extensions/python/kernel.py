@@ -22,7 +22,6 @@ reliably stop threads, loop callbacks or code that swallows KeyboardInterrupt.
 
 import ast
 import asyncio
-import codecs
 import collections
 import importlib
 import importlib.util
@@ -38,6 +37,7 @@ import subprocess
 import sys
 import threading
 import traceback
+import types
 
 KERNEL_FILE = os.path.abspath(__file__)
 
@@ -105,11 +105,21 @@ def sh(command, cwd=None):
     omitted = total - len(head) - len(tail)
     if not omitted:
         return ShResult(code, (head + tail).decode(errors="replace"), 0)
-    # Cut edges may split a character: drop the fragments instead of decoding them as U+FFFD.
-    start = codecs.getincrementaldecoder("utf-8")("replace").decode(bytes(head), final=False)
+    # Cut edges may split a character: drop the fragments (and count them as omitted)
+    # instead of decoding them as U+FFFD.
+    keep = len(head)
+    lead = keep - 1
+    while lead > keep - 4 and lead >= 0 and head[lead] & 0xC0 == 0x80:
+        lead -= 1
+    if lead >= 0:
+        width = 4 if head[lead] >= 0xF0 else 3 if head[lead] >= 0xE0 else 2 if head[lead] >= 0xC0 else 1
+        if keep - lead < width:
+            keep = lead
     skip = 0
     while skip < min(3, len(tail)) and tail[skip] & 0xC0 == 0x80:
         skip += 1
+    omitted += len(head) - keep + skip
+    start = bytes(head[:keep]).decode(errors="replace")
     marker = f"\n[... {omitted} bytes omitted by sh(); redirect to a file to keep everything ...]\n"
     return ShResult(code, start + marker + tail[skip:].decode(errors="replace"), omitted)
 
@@ -191,10 +201,15 @@ class OutputPump:
             for fd in ready:
                 if fd in self.retired:
                     self.discard(fd)
-            if current and (current[0] in ready or self.ending):
+            if current and current[0] in ready:
                 self.copy(current)
             with self.lock:
-                if self.ending and current:
+                finishing = self.ending and current is not None
+            if finishing:
+                # end() runs after the cell released fd 1/2, so this drain sees all its output.
+                self.copy(current)
+            with self.lock:
+                if finishing:
                     os.close(current[1])
                     self.retired.add(current[0])
                     self.current = None
@@ -244,7 +259,12 @@ class Kernel:
         self.session_cwd = os.getcwd()
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        self.ns = {"__name__": "__main__", "__builtins__": __builtins__, "sh": sh, "pip": pip}
+        # A real __main__ module, so classes defined in cells pickle and introspect normally.
+        sys.modules["_pi_kernel"] = sys.modules["__main__"]  # keep the kernel module alive
+        main_module = types.ModuleType("__main__")
+        sys.modules["__main__"] = main_module
+        self.ns = main_module.__dict__
+        self.ns.update({"__builtins__": __builtins__, "sh": sh, "pip": pip})
         self.preload()
         self.baseline = set(self.ns)
 

@@ -142,6 +142,8 @@ export class PythonKernel {
 		const notes: string[] = [];
 		let status: CellStatus;
 		const reset = "the kernel and its process group were stopped; variables are gone";
+		// After Esc the model may never see this result: the next call repeats the loss.
+		if (stopped) this.lostState = true;
 		if (stopped === "interrupted") {
 			status = "interrupted";
 			notes.push(`[interrupted: ${reset}]`);

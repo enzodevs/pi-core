@@ -11,14 +11,32 @@ import { getPythonPaths } from "./paths.mjs";
 const MAX_NOTICE_BYTES = 2_000;
 const MAX_NOTICE_NAME_CHARS = 64;
 const PREVIEW_LINES = 12;
+/** The only always-on cost: one line, while the tool is not loaded but findable. */
+export const DISCOVERY_HINT =
+	"For repeated analysis of local files, tables, logs or command output, load the persistent `python` tool with tool_search.";
 
 const PYTHON_DESCRIPTION = [
-	"Persistent Python 3.15 kernel: variables survive across calls, so load data once and print only what you need; the last expression is shown.",
+	"Persistent local Python 3.15 kernel for repeated analysis of files, tables, logs and command output: variables survive across calls, so load data once and print only what you need; the last expression is shown.",
 	`Output keeps its start and end (~${MAX_OUTPUT_BYTES / 1024}KB); the rest is saved to a file.`,
 	"Lazy preloads: np, pd, pl, duckdb, yaml, httpx, Path, json, re.",
 	"sh(cmd) runs in the kernel's directory (the session directory unless a cell changed it) and returns .code and .out; pip(*pkgs) installs into the shared kernel venv.",
-	"An interrupt or the 10-minute limit kills the kernel and its process group, as bash does: variables are lost. Not a sandbox.",
+	"An interrupt or the 10-minute limit kills the kernel and its process group, as bash does: variables are lost. Runs isolated (-I): project modules are not importable from the cwd. Not a sandbox.",
 ].join(" ");
+
+/**
+ * Tell the model the deferred tool exists, only while tool_search can load it and it is not
+ * loaded yet. A custom section, because Pi drops rule bullets when SYSTEM.md replaces the prompt.
+ */
+export function addDiscoveryHint(options: {
+	selectedTools?: string[];
+	sections?: Record<string, string>;
+}): void {
+	const tools = options.selectedTools ?? [];
+	if (!tools.includes("tool_search") || tools.includes("python")) return;
+	// Pi reads the objects it handed to the event: add to them in place.
+	if (options.sections) options.sections.python_tool = DISCOVERY_HINT;
+	else options.sections = { python_tool: DISCOVERY_HINT };
+}
 
 export function formatNamesNotice(names: string[]): string | undefined {
 	const prefix = "[python] The kernel survived compaction; these names are still defined: ";
@@ -49,6 +67,8 @@ export default function python(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "python",
 		label: "Python",
+		// Declared to the model only after tool_search loads it; DISCOVERY_HINT says it exists.
+		exposure: "deferred",
 		description: PYTHON_DESCRIPTION,
 		promptSnippet:
 			"python: persistent Python 3.15 kernel for successive analysis over data kept in variables",
@@ -91,6 +111,8 @@ export default function python(pi: ExtensionAPI): void {
 			ctx.ui.notify("Python kernel reset; the next python call starts fresh.", "info");
 		},
 	});
+
+	pi.on("before_agent_start", (event) => addDiscoveryHint(event.systemPromptOptions));
 
 	pi.on("session_compact", async () => {
 		const notice = formatNamesNotice((await kernel?.names()) ?? []);

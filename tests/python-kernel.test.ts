@@ -13,7 +13,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { formatNamesNotice } from "../extensions/python/index.js";
+import { addDiscoveryHint, DISCOVERY_HINT, formatNamesNotice } from "../extensions/python/index.js";
 import { MAX_OUTPUT_BYTES, PythonKernel } from "../extensions/python/kernel-client.js";
 
 // The kernel is stdlib-only and runs on 3.11+; PI_CORE_PYTHON selects another interpreter (e.g. the 3.15 venv).
@@ -101,8 +101,13 @@ describe.skipIf(!available)("python kernel", () => {
 		const result = await kernel.exec("while True:\n    pass", undefined, abortAfter(200));
 		expect(result.status).toBe("interrupted");
 		expect(result.text).toContain("variables are gone");
+		// The model may never see an interrupted result (Esc): the next call repeats the loss.
 		const next = await kernel.exec("'kept' in globals()");
-		expect(next).toMatchObject({ status: "ok", text: "False" });
+		expect(next).toMatchObject({
+			status: "ok",
+			text: "[new kernel: variables from the previous kernel are gone]\nFalse",
+		});
+		expect((await kernel.exec("1")).text).toBe("1");
 	});
 
 	it("stops work even when the cell swallows KeyboardInterrupt or keeps threads and callbacks", async () => {
@@ -286,6 +291,9 @@ describe.skipIf(!available)("python kernel", () => {
 			"r = sh(shlex.quote(sys.executable) + ' -c ' + shlex.quote(\"import sys; sys.stdout.write('€' * 2000000)\"))\n(r.omitted > 0, r.out.count('\\ufffd'))",
 		);
 		expect(cut.text).toBe("(True, 0)");
+		// Fragments dropped at the cut count as omitted: kept text plus omitted is the whole output.
+		const exact = await kernel.exec("r.out.count('€') * 3 + r.omitted");
+		expect(exact.text).toBe("6000000");
 	});
 
 	it("bounds huge output to its start and end and keeps the full text across dispose", async () => {
@@ -354,12 +362,33 @@ describe.skipIf(!available)("python kernel", () => {
 		expect(await kernel.exec("'a' in globals()")).toMatchObject({ status: "ok", text: "False" });
 	});
 
+	it("runs cells in a real __main__ module, so cell classes pickle", async () => {
+		const kernel = create();
+		await kernel.exec("import pickle\nclass Record:\n    def __init__(self, n):\n        self.n = n");
+		expect((await kernel.exec("pickle.loads(pickle.dumps(Record(3))).n")).text).toBe("3");
+		expect(await kernel.names()).toEqual(expect.arrayContaining(["Record"]));
+	});
+
 	it("supports top-level await", async () => {
 		const kernel = create();
 		expect(await kernel.exec("import asyncio\nawait asyncio.sleep(0.01)\n'done'")).toMatchObject({
 			status: "ok",
 			text: "'done'",
 		});
+	});
+});
+
+describe("python discovery hint", () => {
+	it("is added only while python is findable but not loaded", () => {
+		const findable = { selectedTools: ["read", "tool_search"], sections: { other: "kept" } };
+		addDiscoveryHint(findable);
+		expect(findable.sections).toEqual({ other: "kept", python_tool: DISCOVERY_HINT });
+		const loaded = { selectedTools: ["tool_search", "python"] };
+		addDiscoveryHint(loaded);
+		expect(loaded).toEqual({ selectedTools: ["tool_search", "python"] });
+		const unreachable = { selectedTools: ["read"] };
+		addDiscoveryHint(unreachable);
+		expect(unreachable).toEqual({ selectedTools: ["read"] });
 	});
 });
 
