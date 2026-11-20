@@ -261,6 +261,7 @@ class Kernel:
         asyncio.set_event_loop(self.loop)
         # A real __main__ module, so classes defined in cells pickle and introspect normally.
         sys.modules["_pi_kernel"] = sys.modules["__main__"]  # keep the kernel module alive
+        ShResult.__module__ = "_pi_kernel"  # so sh() results still pickle
         main_module = types.ModuleType("__main__")
         sys.modules["__main__"] = main_module
         self.ns = main_module.__dict__

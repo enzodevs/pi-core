@@ -362,10 +362,11 @@ describe.skipIf(!available)("python kernel", () => {
 		expect(await kernel.exec("'a' in globals()")).toMatchObject({ status: "ok", text: "False" });
 	});
 
-	it("runs cells in a real __main__ module, so cell classes pickle", async () => {
+	it("runs cells in a real __main__ module, so cell classes and sh() results pickle", async () => {
 		const kernel = create();
 		await kernel.exec("import pickle\nclass Record:\n    def __init__(self, n):\n        self.n = n");
 		expect((await kernel.exec("pickle.loads(pickle.dumps(Record(3))).n")).text).toBe("3");
+		expect((await kernel.exec("pickle.loads(pickle.dumps(sh('printf hi'))).out")).text).toBe("'hi'");
 		expect(await kernel.names()).toEqual(expect.arrayContaining(["Record"]));
 	});
 
