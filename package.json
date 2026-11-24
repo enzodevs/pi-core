@@ -42,6 +42,7 @@
 			"./extensions/draft-toggle/index.ts",
 			"./extensions/translate/index.ts",
 			"./extensions/image-clipboard/index.ts",
+			"./extensions/generate-image/index.ts",
 			"./extensions/background-process/index.ts",
 			"./extensions/scheduler/index.ts",
 			"./extensions/memory/index.ts",

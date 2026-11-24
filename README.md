@@ -373,6 +373,12 @@ flowchart LR
     Analytics --> Sessions[(Pi session JSONL)]
 ```
 
+## Subscription image generation
+
+`generate_image` is deferred: discover it with `tool_search` when you need a PNG. It takes only a prompt and returns a path beneath `~/.pi/agent/pi-core/images/`, not image bytes. Use `read` on the path for a preview. Each call requests one image and uses subscription quota. Quality, size and background are automatic; describe any desired dimensions or transparency in the prompt and verify the PNG when exact output matters.
+
+Requires a ChatGPT login from `codex login` in file credential storage (`$CODEX_HOME/auth.json`, normally `~/.codex/auth.json`). The Pi chat login alone is not sufficient. The tool uses only the access token and account ID, never refreshes or changes credentials, and never falls back to API billing. On HTTP 401 renew the CLI login. The Codex backend controls image quality and model availability; this is not the public Images API.
+
 ## Codemode (opt-in)
 
 Pi 1.0 includes upstream codemode; pi-core does not implement a second sandbox. Enable it in `~/.pi/agent/settings.json` (merge with existing settings):

@@ -125,6 +125,8 @@ describe("real CLI resource startup (offline, no model requests)", () => {
 				]),
 			);
 			expect(runtime.tools).toEqual(expect.arrayContaining(["codemode", "tool_search", "fixture_tool"]));
+			expect(runtime.tools).toContain("generate_image");
+			expect(runtime.active).not.toContain("generate_image");
 			for (const removed of ["background_agent", "agent_control", "ask_parent"])
 				expect(runtime.tools).not.toContain(removed);
 			expect(runtime.tools.filter((name) => name === "codemode")).toHaveLength(1);
