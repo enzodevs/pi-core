@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install format format-check typecheck test fallow health check pack compat-latest compat-package clean headroom-install headroom-test python-install translate-install translate-test review-skill-check
+.PHONY: help install format format-check typecheck test fallow health check pack compat-latest compat-package clean headroom-install headroom-test python-install translate-install translate-test
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -40,9 +40,6 @@ translate-install: ## Download and verify the optional local TranslateGemma mode
 
 translate-test: ## Exercise local translation and report latency (requires llama-server)
 	npm run translate:test
-
-review-skill-check: ## Verify the generated evidence-first review skill
-	npm run review:skill:check
 
 check: ## Run all required verification
 	npm run check

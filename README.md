@@ -18,7 +18,6 @@
   <a href="#context-inspector"><strong>Context</strong></a> ·
   <a href="#skill-visibility"><strong>Skills</strong></a> ·
   <a href="#session-analytics"><strong>Analytics</strong></a> ·
-  <a href="#background-subagents"><strong>Subagents</strong></a> ·
   <a href="#background-processes"><strong>Processes</strong></a> ·
   <a href="#ask-the-user"><strong>Questions</strong></a> ·
   <a href="#temporary-sudo"><strong>Sudo</strong></a> ·
@@ -28,7 +27,7 @@
   <a href="CONTEXT-HYGIENE.md"><strong>Context hygiene</strong></a>
 </p>
 
-**Pi Core** is a lean, Node-native control layer for [Pi](https://pi.dev): per-project skill visibility, durable memory, session analytics, portable background subagents and processes, focused TUI improvements, and an OpenAI Codex Fast mode toggle. It is designed around one constraint most agent tooling treats as an afterthought: **everything placed in context has a recurring cost**.
+**Pi Core** is a lean, Node-native control layer for [Pi](https://pi.dev): per-project skill visibility, durable memory, session analytics, background processes, focused TUI improvements, and an OpenAI Codex Fast mode toggle. It is designed around one constraint most agent tooling treats as an afterthought: **everything placed in context has a recurring cost**.
 
 No polling loop. No sprawling always-active tool catalog. Variable output is bounded, and intermediate work stays outside the parent context.
 
@@ -51,7 +50,6 @@ No polling loop. No sprawling always-active tool catalog. Variable output is bou
 - **Read-only session analytics** — inspect cost, transcripts, errors, and prompt patterns without an always-active tool.
 - **Context hygiene** — bounded tool outputs and targeted retrieval without lossy rewriting of historical evidence.
 - **Optional JSON compaction** — a local, lossless-only Headroom pilot, disabled by default, with exact original-file recovery.
-- **Observable background subagents** — run real interactive Pi TUI children in isolated Herdr tabs or tmux panes, with bounded sidecar delivery and a portable RPC fallback.
 - **Persistent Python kernel** — an opt-in `python` tool on Python 3.15 whose variables and helpers survive between calls and compaction, with bounded output.
 - **Bounded background processes** — watch finite CI gates or run persistent services with rotating searchable logs and direct TUI control.
 - **Deferred session scheduler** — persist one-shot, interval, and cron jobs; run shell checks without model calls and wake the agent only when needed. [Behavior and limits](extensions/scheduler/README.md).
@@ -220,73 +218,9 @@ Use narrow paths, result limits, and source-side filters. For noisy checks, save
 
 After upgrading, reload extensions or start a fresh Pi session to unload the old guard. Existing files under `~/.pi/agent/pi-core/context-artifacts/` are no longer read or written; they are left untouched rather than deleting historical session evidence.
 
-## Background subagents
+## Delegation
 
-Use `agent_control(action="catalog", query="GPT 6 Astra")` to discover agent profiles and matching available model IDs before delegation. The optional search matches provider, ID, and display name; results include omission counts (narrow the search when needed). Copy the exact `provider/model` into `background_agent.model` and pass `thinking` separately. Catalog discovery does not start agents or select a model automatically. Each profile reports its winning `source`, default `workspace`, and `workspaceSource`, so a personal override and an inherited bundled workspace policy are distinguishable. An explicit launch `workspace` still overrides that default.
-
-User profiles in `~/.pi/agent/agents/*.md` replace same-named bundled prompts and tool lists (only an unspecified workspace policy is inherited). Keep an override only for intentional differences; remove or rename it to a non-`.md` suffix to use the maintained bundled profile. Supported frontmatter fields are `name`, `description`, `tools`, `children`, `model` and `workspace`; `system-prompt` and `auto-exit` are not controls for this runner. `context_lookup` is no longer available. Read-only profile instructions are behavioral contracts, not a filesystem sandbox for tools such as `bash`.
-
-The bundled **`code-health`** profile is an on-demand specialist for responsibilities, directory/module structure, dependencies and testability. It explicitly reads the current global `~/.agents/skills/pragmatic-solid/SKILL.md` and required references; the skill remains the single source of design guidance and is neither bundled nor renamed. Install that skill separately before using this profile. If required guidance is missing, the child reports a blocker rather than silently improvising. No model or reasoning effort is pinned.
-
-Give `code-health` an explicit scope and **assess**, **plan**, or **implement** task. Assessment/planning stays read-only; implementation includes justified refactoring, behavioral/structural verification and local commits. The default workspace is `worktree`. For read-only inspection of current WIP, explicitly use `workspace: inherit` with a stable working tree; never substitute clean HEAD for requested uncommitted changes. For implementation, use the normal clean-worktree setup below. The agent does not merge or publish, and a broad request is not automatically reduced to one small refactor. Use it for intentional assessments or scoped improvements, not continuous background cleanup; use `reviewer` to validate exact changes.
-
-For example, after choosing a model from the catalog:
-
-```text
-background_agent(agent="code-health", cwd="/path/to/project", workspace="inherit", task="Assess the current checkout's application module structure read-only. Inspect ownership, dependencies, callers and tests; report justified improvements and preserve decisions. Do not edit files.", model="<provider/model>", thinking="low")
-```
-
-`background_agent` returns a short run ID immediately, leaving the parent free to continue. Writing profiles can declare `workspace: worktree`; Pi Core then provisions clean linked worktrees exclusively through [Worktrunk](https://worktrunk.dev/) and launches the child there. Install `wt` separately and keep it on `PATH` (for example, `cargo install worktrunk`). Inside Herdr, Pi Core creates a background **Pi subagents** workspace and gives each child its own tab without splitting the parent terminal or changing focus. Siblings launched by the same parent instance share that workspace; descendants inherit it. Tabs and workspaces are retained for inspection and manual cleanup, so automatic cleanup cannot close a terminal you have repurposed. Herdr has priority over an outer tmux environment. An unconfirmed Herdr launch is reported rather than retried through another backend, avoiding duplicate agents. Outside Herdr, when the parent is inside a valid tmux pane, Pi Core opens a detached split containing the **actual interactive Pi TUI child**. Focus it with normal tmux navigation to observe, scroll, or interact with the child directly. Nested agents use the same backend selection, so an allowed child delegation opens another real pane. Outside tmux, or when pane launch fails before work starts, Pi Core preserves the isolated RPC backend.
-
-Every child gets a persistent Pi session named `agent:<profile>:<run-id>`. Its session header links to the direct parent session, and a non-context custom entry records validated lineage. The child starts with extension discovery disabled, the Pi Core subagent, Fast mode, JSON Headroom, and nested guide extensions loaded by absolute path, skills and prompt templates disabled, and an explicit tool allowlist. Profile tools remain restrictive; Pi Core adds only `ask_parent` and, when the pinned child policy permits nesting, `background_agent` plus `agent_control`.
-
-Parent/child control never uses pane keystrokes or captured terminal output. A private `0700` sidecar beneath `~/.pi/agent/pi-core/subagents/runs/` carries atomic, ownership-checked question, reply, steering, cancellation, exit, and final-result records. This means human typing, focus changes, scrolling, and TUI rendering cannot corrupt automatic delivery. Thinking, tool transcripts, and pane contents never enter the parent; only one immutable UTF-8-bounded final assistant handoff is pushed durably.
-
-A child receives the child-only `ask_parent` tool. It can send one concise blocking question, end its turn without aborting it, and remain alive. Interactive replies are acknowledged only after a matching command receipt appears in the child session; the parent retains its pending question until acceptance. An unconfirmed reply stays queued, and retrying the same answer reconciles its original receipt rather than submitting it twice. Herdr state reporting is best effort and never carries control traffic. While waiting, ordinary input in the child pane is held so the direct parent remains the answer authority. Reply from the parent with:
-
-```text
-agent_control(action="reply", id="<run-id>", message="<answer>")
-```
-
-`agent_control` also lists compact status, steers a running direct child through the sidecar, or cancels it. Reading `status(id)` for a terminal child consumes its unread completion; aggregate status and running-child status do not. Otherwise Pi Core keeps completions pending while the parent is active, then sends one hidden, bounded batch receipt that requests a single parent synthesis turn. The receipt contains versioned run metadata, while full persisted evidence remains explicitly retrievable with `status(id)`. Blocking questions remain immediate, and failed, canceled, or lost children join the next idle batch even when siblings are still running. A parent cannot control grandchildren. Agent definitions opt into nested delegation with `children` frontmatter. The bundled `worker` and `code-health` profiles may delegate only to `reviewer`; the bundled reviewer does not enable nested delegation. Depth and concurrency limits still bound profiles that opt into nesting.
-
-```markdown
----
-name: coordinator
-description: Coordinates implementation and review
-children: worker, reviewer
-workspace: worktree
----
-```
-
-Children load the normal Pi environment: configured and discovered extensions, skills, prompt templates, project resources and built-in MCP/tool-search/codemode support. Project trust follows Pi's normal policy (including global `defaultProjectTrust`); being a child no longer forces `--no-approve`. The launcher forwards explicit parent CLI resource paths (resolved before entering a worktree), trust overrides, resource opt-outs and tool exclusions. Defaults are augmented with the parent's active tools and child coordination tools, not replaced by a minimal allowlist. Bundled profiles do not restrict tools; an explicit `tools:` list in a custom profile still opts into Pi's tool selection rules. Such a list is not a sandbox and does not by itself remove MCP access. The reviewer's no-edit instructions and the task's approval requirements still apply.
-
-Each child has its own extension runtime, conversation and workspace. This is not a clone of in-memory extension state: interactive toggles, active connections and SDK-only inline extensions are not serialized into a child. Extensions resolve project resources from the child's CWD. RPC child extension dialogs are forwarded to the parent's user interface; unavailable UI cancels rather than auto-approves. TUI-only capabilities retain their normal platform requirements. Delegation permissions, worktree isolation, direct-parent ownership and concurrency/depth limits are unchanged.
-
-The bundled `worker` and `code-health` default to `workspace: worktree`; read-only profiles inherit their requested CWD. User or project profiles that override a bundled writer retain its workspace policy unless they explicitly declare `workspace: inherit`, so changing a model or prompt cannot silently disable isolation. Start results expose the effective profile source and workspace mode, and aggregate status includes bounded profile provenance. A caller may explicitly set `workspace: inherit` for a task that must see uncommitted parent state. Clean linked worktrees are reused, while a clean primary checkout receives a unique `pi-agent/<profile>-<run-id>` branch through `wt switch`. Dirty checkouts fail with recovery guidance rather than sharing mutable state or silently omitting uncommitted work. Top-level `vendor`, `node_modules`, and `.venv` paths that resolve outside a linked worktree are rejected. Dependency installation belongs in a blocking Worktrunk `pre-start` hook; asynchronous hooks can race the child launch. New worktree launches refuse unapproved Worktrunk hooks instead of silently skipping setup: review `wt hook show` and approve trusted commands with `wt config approvals add`. Start results and the worker runtime prompt report whether the pre-start hook completed, was absent, or was not rerun for a reused worktree, so the agent knows when it must verify dependencies. Agent worktrees are retained while their work is unreviewed.
-
-The harness records created and reused worktrees in `~/.pi/agent/pi-core/subagents/worktrees.json` before launching a child. Workspace preparation, verification, integration, and cleanup share a cross-process lifecycle lock, so cleanup cannot delete a worktree in use by another Pi parent. These lifecycle operations are serialized; lock or ledger failures prevent an unreserved launch rather than silently bypassing safety. The top-level parent removes a recorded worktree only when its branch adds nothing to the default branch according to Worktrunk (including cherry-picked or squash-merged work), its tree is clean, no recorded run is active (runs abandoned for over a day excepted), and no process works inside it. Automatic cleanup requires Linux `/proc` process visibility; it retains worktrees when that visibility is unavailable. Primary and detached checkouts are never removed. Removal uses `wt remove --foreground` without force flags: Worktrunk re-checks dirtiness and preserves branches that moved or became unintegrated. Listing explicitly selects JSON schema 1 regardless of user configuration.
-
-Cleanup runs at session start, after worktree agent starts/completions, and when the parent turn settles (including after integration). `/worktrees-clean` runs it on demand and reports what was kept and why. For worktrees left by older versions, `/worktrees-clean --adopt` discovers untracked generated `pi-agent/<profile>-<run-id>` branches in the current repository and asks for confirmation before tracking up to 20 at a time; the same safety checks then apply. Unrelated worktrees are never discovered for adoption. The harness does not automatically merge, cherry-pick, or approve agent changes.
-
-### Managed verification and integration
-
-After a worktree child completes successfully, the harness runs the repository's **approved Worktrunk `pre-merge` hooks** before delivering its completion. The child must leave a clean, committed linked worktree. Missing checks, unapproved hooks, dirty work, cancellation, and failed checks are reported explicitly—none becomes a passing receipt. The repo's `.config/wt.toml` can declare `pre-merge = "make check"` (as this package does); choose the appropriate check command for each project and approve it through Worktrunk. No model-provided shell command or automatic approval is added.
-
-A passing receipt records the exact commit, source branch, default branch and its tip, hook fingerprint, and a private log path. Checks have a ten-minute deadline, cancellable process-tree ownership, and two rotating 4 MiB log segments under `~/.pi/agent/pi-core/subagents/checks/`. Only the conclusion and log reference enter the handoff, not the test transcript. Inspect `agent_control(action="status", id="<run-id>")` or retry with:
-
-```text
-agent_control(action="verify", id="<run-id>")
-agent_control(action="integrate", id="<run-id>", revision="<exact-reviewed-commit-SHA>")
-```
-
-Only the top-level parent can request integration, after reviewing the changes and when the user's task authorizes it; there is no extra per-merge confirmation. Integration refuses stale verification, active sibling runs, dirty targets, and non-fast-forward histories. The Worktrunk default branch must have exactly one checkout. The harness uses Git's `merge --ff-only <verified-SHA>` to pin the approved code rather than letting `wt merge` auto-commit, squash, or rebase a moving source branch. Worktrunk still owns workspace setup, approved verification hooks, and safe cleanup. No remote push is performed.
-
-Verification/integration state survives in the parent session. Interrupted checks require an explicit `verify` retry; an interrupted integration can be retried with the same revision to reconcile an already-updated target without repeating the merge, including after cleanup. `stop` cancels an active verification operation; session replacement aborts checks and preserves an explicit interrupted state. Integration already in its atomic Git update is reconciled rather than assumed undone. Completed worktree runs awaiting integration are retained beyond the recent-status display limit.
-
-Subagent starts are unlimited. Safety limits default to depth 3, six globally concurrent children, 32 KiB tasks, 12 KiB handoffs, 4 KiB questions, and 8 KiB replies. Input envelopes allow substantial instructions and clarifications; handoffs remain compact. There is no subagent-specific tool-call count, execution deadline, or token/dollar budget. Aggregate `agent_control status` reports temporary global concurrency. Configure limits before Pi starts with `PI_CORE_SUBAGENT_MAX_DEPTH`, `PI_CORE_SUBAGENT_GLOBAL_CONCURRENCY`, `PI_CORE_SUBAGENT_TASK_BYTES`, `PI_CORE_SUBAGENT_HANDOFF_BYTES`, `PI_CORE_SUBAGENT_QUESTION_BYTES`, and `PI_CORE_SUBAGENT_REPLY_BYTES`. Root limits are pinned into descendant lineage so a child cannot raise them. Global leases are coordinated atomically beneath `~/.pi/agent/pi-core/subagents/`.
-
-A settled TUI child seals its final handoff, shows a short completion notice, and exits automatically after a brief grace period. After a successful Herdr child exits with code zero, its pane host saves the exit receipt and closes only its own pane. Cleanup validates the private success/exit receipts and asks Herdr to confirm that the cleanup host still belongs to the current pane's foreground job; caller-relative lookup follows pane moves. Failed, stopped, nonzero-exit and uncertain cases stay open for inspection. Close failures are not retried, and session history, handoffs and worktrees are preserved. The host owns cleanup independently of parent reloads or shutdown. Closing a pane early fails that run; stopping it requests cancellation through the private channel. Unresponsive tmux panes are force-closed; Herdr cancellation never force-closes a terminal, and unconfirmed cancellation is reported explicitly. Herdr startup must acknowledge the private channel within 30 seconds; late starts receive a durable cancellation request. Parent branch changes and normal shutdown cancel owned children. `/reload` is different: live tmux and Herdr children are detached from the retiring extension instance and reattached by the new one using their durable lineage, pane, session, and sidecar metadata. Herdr server endpoint information is retained with each run. RPC children cannot be reattached and are terminalized safely on reload. Herdr server restart/resume of child agents is not automatic.
+Pi Core does not launch subagents. For explicitly requested delegation, use the global Herdr skill inside a Herdr pane. The child can end its turn with a plain-text question or result; wait for the turn to settle, then read it. Herdr does not forward the text to the parent. If upgrading from the native coordinator, finish any active children first and start a fresh Pi session. Existing sessions and worktrees are not deleted.
 
 ## Background processes
 
@@ -429,13 +363,6 @@ The benchmark keeps one `pi --mode rpc` process—and its OpenAI Codex websocket
 ```mermaid
 flowchart LR
     Pi[Parent Pi session] --> Skills[Skill visibility]
-    Pi --> Agents[Shared subagent coordinator]
-    Agents --> Tmux[Interactive tmux TUI runner]
-    Agents --> RPC[RPC fallback runner]
-    Tmux --> Child[Persistent child Pi session]
-    RPC --> Child
-    Child --> Nested[Allowed named child pane]
-    Child <--> Sidecar[Bounded atomic sidecar]
     Pi --> Footer[Minimal reactive footer]
     Pi --> Fast[Fast-mode request hook]
     Pi --> Analytics[On-demand session analytics]
@@ -443,13 +370,12 @@ flowchart LR
     ToolResults[Full session tool results] --> Guard
     Guard --> Model[Bounded diagnostic-first evidence]
     Skills --> Store[(~/.pi/agent/pi-core)]
-    Agents --> Store
     Analytics --> Sessions[(Pi session JSONL)]
 ```
 
-## Codemode (parent opt-in, automatic in children)
+## Codemode (opt-in)
 
-Pi 1.0 includes upstream codemode; pi-core does not implement a second sandbox. For the parent session, enable it in `~/.pi/agent/settings.json` (merge with existing settings):
+Pi 1.0 includes upstream codemode; pi-core does not implement a second sandbox. Enable it in `~/.pi/agent/settings.json` (merge with existing settings):
 
 ```json
 {
@@ -464,12 +390,10 @@ Scripts can batch independent calls and filter large results before printing a c
 
 Pi-core compatibility boundaries:
 
-- `ask_user_question`, `sudo`, and child `ask_parent` use `model-only` exposure: they stay directly available to the model but cannot be called from scripts. User interaction and privileged approval must not be hidden inside a batch.
+- `ask_user_question` and `sudo` use `model-only` exposure: they stay directly available to the model but cannot be called from scripts. User interaction and privileged approval must not be hidden inside a batch.
 - Session-CWD tools retain Pi's structured output schemas, so scripts receive structured bash results and honor session directory changes.
 - The optional Headroom JSON pilot skips nested calls, preserving the raw structured values that scripts can filter themselves.
 - Opt-in nested project guidance remains limited to direct reads. Codemode reads do not activate nested guides; explicitly read the applicable guide with a direct `read` when needed. Nested result metadata is not promoted into parent guidance.
-- Every child automatically gets upstream codemode in `on` mode; no parent-facing flag, profile edits, or repeated prompt instructions are required. Scripts can call only the child's allowed tools. Even a profile with no filesystem tools can use pure computation, but gains no filesystem access.
-- Child codemode disables classifier/image-model APIs (`models: false`); batching itself stays local and exposes no additional provider-backed model capabilities. Children do not inherit parent MCP servers or unrelated extensions. `ask_parent` remains directly available, never callable from scripts.
 
 `make test` includes local codemode integration tests against the real upstream QuickJS worker: batching/filtering, large structured output, mixed failures, nonzero exits, interactive-tool exclusion, nested-guide isolation, and session-CWD changes. These tests make no classifier, image-generation, or hosted chat requests.
 
@@ -504,8 +428,6 @@ Compatibility checks cover two additional boundaries:
 - The regular Vitest suite loads every configured extension through Pi's public extension loader and compiles an explicit public-API contract against the locked Pi dependencies.
 - `make compat-package` packs pi-core, installs the tarball into an isolated temporary project with the locked Pi version, and loads every packaged extension.
 - `make compat-latest` copies the repository to an isolated temporary directory, installs the latest published Pi packages, and runs type checking, tests, a package dry run, and `compat:package`. The final check installs the tarball and loads its extensions, catching incompatible peer dependency ranges as well as loader failures. It is intentionally opt-in because it requires network access and may expose an upstream breaking change before pi-core updates its lockfile.
-
-Subagent resource regressions cover the shared RPC/TUI launch arguments, explicit custom-profile restrictions, effective nested-guide trust, parent UI approval forwarding and the real offline Pi CLI loading the full pi-core package alongside trusted project extensions, skills and templates. Codemode comes from Pi's normal built-in extension and retains configured behavior and model APIs; no child-local replacement is registered. Tests exercise its real sandbox without provider requests. Nested guides use effective runtime trust for parents and children alike, with the same opt-in and startup-context requirements.
 
 Set `PI_CORE_KEEP_COMPAT_TEMP=1` to preserve a compatibility command's temporary workspace for diagnosis.
 

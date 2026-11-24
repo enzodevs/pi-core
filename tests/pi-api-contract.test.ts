@@ -24,7 +24,6 @@ import idleRecap from "../extensions/recap/index.js";
 import sessionCwd from "../extensions/session-cwd/index.js";
 import sessionTitle from "../extensions/session-title/index.js";
 import skillManager from "../extensions/skill-manager/index.js";
-import backgroundAgents from "../extensions/subagent/index.js";
 import sudoExtension from "../extensions/sudo/index.js";
 import interfaceDefaults from "../extensions/ui/index.js";
 
@@ -47,7 +46,6 @@ const factories = [
 	sessionCwd,
 	sessionTitle,
 	skillManager,
-	backgroundAgents,
 	sudoExtension,
 ] satisfies ExtensionFactory[];
 

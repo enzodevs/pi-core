@@ -11,7 +11,7 @@ The local policy adapts those recommendations rather than granting unlimited aut
 ## Where instructions belong
 
 - `~/.agents/AGENTS.md` (also supplied to Pi through `~/.pi/agent/AGENTS.md`): shared authority, initiative, safety, research and verification policy. Keep each universal rule here once.
-- `~/.pi/agent/SYSTEM.md`: Pi-specific tool mechanics, installed API documentation, codemode and delegation guidance. It replaces Pi's default prompt; do not repeat the shared agreement here. These are personal configuration files, not files installed or overwritten by this package.
+- `~/.pi/agent/SYSTEM.md`: Pi-specific tool mechanics, installed API documentation and codemode guidance. It replaces Pi's default prompt; do not repeat the shared agreement here. These are personal configuration files, not files installed or overwritten by this package.
 - Repository `AGENTS.md`: project commands, constraints, and conventions.
 - `CONTEXT-HYGIENE.md`: extension design and output contracts.
 - Individual requests: the actual outcome, operation, constraints, and acceptance evidence.

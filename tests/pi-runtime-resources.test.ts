@@ -2,19 +2,14 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { discoverAgents } from "../extensions/subagent/agents.js";
-import { DEFAULT_SUBAGENT_LIMITS } from "../extensions/subagent/limits.js";
-import { createChildLineage, encodeChildLineage } from "../extensions/subagent/protocol.js";
-import { buildChildArgs } from "../extensions/subagent/runner.js";
 
 async function put(file: string, content: string) {
 	await mkdir(dirname(file), { recursive: true });
 	await writeFile(file, content);
 }
 
-describe("real CLI child resource startup (offline, no model requests)", () => {
+describe("real CLI resource startup (offline, no model requests)", () => {
 	it("loads normal package/project extensions, skills, templates and built-ins without conflicts", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pi-child-resources-"));
 		let child: ReturnType<typeof spawn> | undefined;
@@ -25,6 +20,7 @@ describe("real CLI child resource startup (offline, no model requests)", () => {
 				join(agentDir, "settings.json"),
 				JSON.stringify({
 					packages: [resolve(".")],
+					defaultTools: ["+codemode"],
 					defaultProjectTrust: "always",
 					enableInstallTelemetry: false,
 				}),
@@ -53,30 +49,14 @@ describe("real CLI child resource startup (offline, no model requests)", () => {
 				}
 			`,
 			);
-			const lineage = createChildLineage({
-				parent: null,
-				runId: "11111111",
-				agent: "worker",
-				allowedChildren: ["reviewer"],
-				limits: DEFAULT_SUBAGENT_LIMITS,
-				registryPath: join(root, "concurrency.json"),
-			});
-			const agent = discoverAgents(cwd, "project").agents.find((a) => a.name === "worker");
-			if (!agent) throw new Error("Missing bundled worker");
-			expect(agent.tools).toBeUndefined();
-			await put(join(root, "system.md"), "Offline runtime fixture.");
-			const args = buildChildArgs(
-				{
-					agent,
-					lineage,
-					ctx: { model: undefined } as unknown as ExtensionContext,
-					parentTools: ["grep", "find", "ls"],
-				},
-				join(root, "system.md"),
-			);
 			child = spawn(
 				process.execPath,
-				[resolve("node_modules/@earendil-works/pi-coding-agent/dist/cli.js"), ...args],
+				[
+					resolve("node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),
+					"--mode",
+					"rpc",
+					"--no-session",
+				],
 				{
 					cwd,
 					env: {
@@ -85,9 +65,6 @@ describe("real CLI child resource startup (offline, no model requests)", () => {
 						PI_CODING_AGENT_DIR: agentDir,
 						PI_OFFLINE: "1",
 						PI_CORE_MEMORY_CONSOLIDATOR: "1",
-						PI_CORE_SUBAGENT_CONTEXT: encodeChildLineage(lineage),
-						PI_CORE_SUBAGENT_CHANNEL: "",
-						PI_CORE_SUBAGENT_CHANNEL_TOKEN: "",
 					},
 					stdio: ["pipe", "pipe", "pipe"],
 					signal: AbortSignal.timeout(20_000),
@@ -145,13 +122,11 @@ describe("real CLI child resource startup (offline, no model requests)", () => {
 					"search_skills",
 					"load_skill",
 					"codemode",
-					"ask_parent",
-					"grep",
-					"find",
-					"ls",
 				]),
 			);
 			expect(runtime.tools).toEqual(expect.arrayContaining(["codemode", "tool_search", "fixture_tool"]));
+			for (const removed of ["background_agent", "agent_control", "ask_parent"])
+				expect(runtime.tools).not.toContain(removed);
 			expect(runtime.tools.filter((name) => name === "codemode")).toHaveLength(1);
 			expect(runtime.commands).toEqual(expect.arrayContaining(["skill:fixture", "fixture-prompt", "mcp"]));
 			expect(errors).not.toMatch(/conflict|duplicate|Failed to load extension/i);

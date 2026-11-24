@@ -17,7 +17,7 @@ Use an explicit requested release when provided; otherwise identify the installe
 
 Read the matching installed Pi `CHANGELOG.md`, relevant `docs/`, examples, and public types. If unavailable, fetch primary upstream release/docs sources. Do not send private repository content or secrets to external research. The cached upstream snapshot mentioned in `AGENTS.md` may be stale; verify its version before using it.
 
-Focus on changed extension APIs, event ordering, tool exposure/schemas, codemode, CWD/read behavior, RPC/TUI children, providers, Node requirements, and security fixes. A patch version or green typecheck alone does not prove compatibility. Reuse upstream fixes instead of copying sandbox/provider implementations into pi-core.
+Focus on changed extension APIs, event ordering, tool exposure/schemas, codemode, CWD/read behavior, providers, Node requirements, and security fixes. A patch version or green typecheck alone does not prove compatibility. Reuse upstream fixes instead of copying sandbox/provider implementations into pi-core.
 
 ## 3. Apply an authorized update
 
@@ -40,8 +40,6 @@ npm install --save-dev --save-exact --ignore-scripts --no-audit --no-fund \
 ```
 
 Inspect the resulting dependency diff and resolved security-sensitive transitives. Do not use broad `npm audit fix --force` or upgrade unrelated dependencies. Keep compatible peer ranges unless evidence requires changing the supported range; a development baseline bump alone is not a reason to raise the minimum. Update the tested baseline in `README.md`. Add runtime changes/regressions only for concrete API or behavior differences.
-
-Preserve child tool allowlists, direct-only `ask_parent`, disabled child classifier/image APIs, no implicit MCP inheritance, and bounded parent handoffs. Do not add parent-facing upgrade/delegation flags or repeated prompt instructions.
 
 ## 4. Verify through the stable interface
 
