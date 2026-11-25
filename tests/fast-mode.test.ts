@@ -43,7 +43,9 @@ describe("Fast mode", () => {
 
 	it("sends Ultrafast only where offered and falls back to Fast elsewhere", async () => {
 		const send = await requestHook(on("ultrafast"));
-		expect(send(openai, true)).toEqual({ input: "test", service_tier: "ultrafast" });
+		for (const id of ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra"]) {
+			expect(send({ ...openai, id }, true)).toEqual({ input: "test", service_tier: "ultrafast" });
+		}
 		expect(send({ ...openai, id: "gpt-6-sol" }, true)).toEqual({ input: "test", service_tier: "priority" });
 	});
 

@@ -330,7 +330,7 @@ Toggle faster processing for your ChatGPT subscription login without restarting 
 
 The modes are exclusive: enabling one replaces the other. They apply to the `openai` provider signed in with ChatGPT and to the legacy `openai-codex-responses` API; OpenAI API-key requests remain untouched because these tiers would bill them at premium rates.
 
-Ultrafast needs a plan that includes it. It is sent only for `gpt-6.1-sol` and `gpt-6-astra`, the models the live OpenAI catalog lists for it; other models use Fast, and the footer shows the tier in effect. Both modes consume plan usage faster, Ultrafast by far the most. The setting is shared by Pi sessions, including subagents, which read it when they start; an already-running process keeps the mode it loaded. The `service_tier` reported in responses can read `default` even when the requested tier is honored, so judge by speed rather than that field.
+Ultrafast needs a plan that includes it. The extension requests it for `gpt-6.2-astra`, `gpt-6.2-sol`, `gpt-6.1-sol`, and `gpt-6-astra`; other models use Fast, and the footer shows the tier in effect. Both modes consume plan usage faster, Ultrafast by far the most. The setting is shared by Pi sessions, including subagents, which read it when they start; an already-running process keeps the mode it loaded. The `service_tier` reported in responses can read `default` even when the requested tier is honored, so judge by speed rather than that field.
 
 State persists at:
 

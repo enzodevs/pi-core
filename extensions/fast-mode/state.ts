@@ -13,7 +13,7 @@ export interface FastModeState {
 const DEFAULT_FAST_MODE_STATE: FastModeState = { version: 1, enabled: false, tier: "priority" };
 
 /** Models whose live OpenAI catalog entry lists the `ultrafast` service tier. */
-const ULTRAFAST_MODELS = new Set(["gpt-6.1-sol", "gpt-6-astra"]);
+const ULTRAFAST_MODELS = new Set(["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra"]);
 
 export function parseFastModeState(value: unknown): FastModeState {
 	if (!value || typeof value !== "object") return { ...DEFAULT_FAST_MODE_STATE };
